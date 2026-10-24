@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Recording details{% endblock %}
+{% block content %}
+<a class="back-link" href="/dashboard">← <span>Back to library</span></a>
+<section class="recording-detail" data-recording-detail data-recording-id="{{ recording_id|default('', true) }}">
+  <div class="detail-topline"><div class="eyebrow">RECORDING</div><span class="badge status-badge" data-recording-status>Loading</span></div>
+  <h1 data-recording-title>Loading recording…</h1>
+  <p class="detail-subtitle" data-recording-subtitle>Getting the latest details</p>
+  <div class="detail-stats card">
+    <div><span class="stat-label">Recorded so far</span><strong data-recording-time>—</strong></div>
+    <div><span class="stat-label">File size</span><strong data-recording-size>—</strong></div>
+    <div><span class="stat-label">Estimated total</span><strong data-recording-estimate>—</strong></div>
+  </div>
+  <section class="duration-section" aria-labelledby="duration-heading">
+    <div class="section-heading"><div><h2 id="duration-heading">Recording length</h2><p>Choose when this recording should stop.</p></div></div>
+    <div class="duration-options" role="group" aria-label="Recording duration">
+      <button class="btn btn-duration" type="button" data-duration="900">15 min</button>
+      <button class="btn btn-duration" type="button" data-duration="1800">30 min</button>
+      <button class="btn btn-duration" type="button" data-duration="3600">1 hour</button>
+      <button class="btn btn-duration" type="button" data-duration="14400">4 hours</button>
+      <button class="btn btn-duration" type="button" data-duration="" data-until-end>Until stream ends</button>
+    </div>
+  </section>
+  <div class="detail-feedback alert" role="status" aria-live="polite" hidden data-detail-feedback></div>
+  <div class="detail-actions">
+    <a class="btn btn-primary" data-play-link href="#" hidden>▶ <span>Play recording</span></a>
+    <a class="btn btn-outline" data-download-link href="#" hidden>↓ <span>Download</span></a>
+    <button class="btn btn-danger" type="button" data-stop-recording hidden>Stop recording</button>
+  </div>
+</section>
+{% endblock %}
