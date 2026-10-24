@@ -102,6 +102,29 @@ sudo docker run \
 
 </details>
 
+## Web Dashboard
+
+This fork adds a private dashboard for starting and managing recordings. It uses the existing recorder, a local SQLite database, and the browser's built-in video player. Live preview is not included.
+
+For local development, install the Python web extra and build the dashboard assets:
+
+```bash
+uv sync --extra web
+bun install --frozen-lockfile
+bun run build
+```
+
+Run the web app and recording worker in separate terminals:
+
+```bash
+PYTHONPATH=src uv run gunicorn --workers 3 --bind 127.0.0.1:8000 web.app:app
+PYTHONPATH=src uv run python -m web.worker
+```
+
+The app stores its SQLite state and recordings under `state/` and `output/` by default. Set `TT_CLIPPER_DATABASE` and `RECORDINGS_DIR` to change those paths. To use a TikTok session cookie, set `TIKTOK_SESSION_SS_FILE` to a file containing it; keep that file out of Git and do not share it. Never paste the cookie into the dashboard.
+
+The Docker Swarm deployment is documented in [docs/deploy.md](docs/deploy.md). It uses the existing Traefik IP allowlist and requires the `tiktok_session_ss` Swarm secret to be provisioned separately.
+
 ## Command-Line Usage
 
 ```bash

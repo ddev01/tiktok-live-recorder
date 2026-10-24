@@ -3,7 +3,7 @@ version: "3.8"
 services:
   web:
     image: ${STACK_NAME:-tt-clipper}:${IMAGE_TAG:?IMAGE_TAG must be set}
-    command: ["gunicorn", "--bind", "0.0.0.0:8000", "web.app:app"]
+    command: ["gunicorn", "--workers", "3", "--no-control-socket", "--bind", "0.0.0.0:8000", "web.app:app"]
     environment:
       PYTHONPATH: /app/src
       TT_CLIPPER_DATABASE: /data/tt-clipper.sqlite3
@@ -51,6 +51,7 @@ services:
           - node.hostname == ${NODE_HOSTNAME:-server}
       restart_policy:
         condition: on-failure
+    stop_grace_period: 2m
 
 volumes:
   recorder-data:

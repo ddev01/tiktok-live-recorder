@@ -4,7 +4,7 @@
 
 @plugin "daisyui" {
   themes: light --default, dark --prefersdark;
-  include: button, input, card, badge, alert, table;
+  include: button, input, select, card, badge, alert, table;
 }
 
 :root {
@@ -134,6 +134,9 @@ h1 { margin: 20px 0 0; font-size: clamp(42px, 7vw, 68px); font-weight: 770; line
 .watch-info { display: grid; min-width: 0; flex: 1; gap: 4px; }
 .watch-info strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .watch-info span { color: color-mix(in srgb, var(--color-base-content) 51%, transparent); font-size: 10px; }
+.watch-max { display: grid; gap: 3px; color: color-mix(in srgb, var(--color-base-content) 51%, transparent); font-size: 9px; }
+.watch-max select { min-height: 31px; padding: 0 24px 0 8px; border: 1px solid color-mix(in srgb, var(--color-base-content) 14%, transparent); border-radius: 7px; background: var(--color-base-100); color: var(--color-base-content); font-size: 10px; }
+.recording-space-warning { margin-top: 16px; }
 .empty-card { grid-column: 1 / -1; padding: 20px; border: 1px solid color-mix(in srgb, var(--color-base-content) 9%, transparent); border-radius: 12px; background: var(--color-base-100); color: color-mix(in srgb, var(--color-base-content) 55%, transparent); font-size: 12px; text-align: center; }
 
 .back-link { display: inline-flex; align-items: center; gap: 8px; margin-top: 50px; color: color-mix(in srgb, var(--color-base-content) 55%, transparent); font-size: 12px; font-weight: 600; }

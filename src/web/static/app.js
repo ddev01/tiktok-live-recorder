@@ -11,12 +11,13 @@
       headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
     });
     const data = response.status === 204 ? null : await response.json().catch(() => null);
-    if (!response.ok) throw new Error(data?.detail || data?.message || `Request failed (${response.status})`);
+    if (!response.ok) throw new Error(data?.detail || data?.message || data?.error || `Request failed (${response.status})`);
     return data;
   }
 
   const listFrom = (data, key) => Array.isArray(data) ? data : (data?.[key] || []);
   const formatSize = (bytes) => {
+    if (bytes == null || bytes === '') return '—';
     const value = Number(bytes);
     if (!Number.isFinite(value) || value < 0) return '—';
     if (value < 1024) return `${value} B`;
@@ -45,7 +46,7 @@
   })[String(status || '').toLowerCase()] || 'badge-neutral';
   const recordId = (record) => record.id ?? record.recording_id;
   const recordStatus = (record) => record.status || (record.is_active ? 'recording' : 'completed');
-  const isActive = (record) => record.is_active === true || ['active', 'recording'].includes(String(record.status).toLowerCase());
+  const isActive = (record) => record.is_active === true || ['starting', 'active', 'recording', 'stopping'].includes(String(record.status).toLowerCase());
 
   function setupTheme() {
     const toggle = $('[data-theme-toggle]');
@@ -198,8 +199,9 @@
       const date = record.started_at || record.created_at || record.date;
       const size = record.file_size_bytes ?? record.size_bytes;
       const pinned = record.keep_forever ?? record.pinned ?? false;
+      const playable = ['completed', 'stopped'].includes(String(status).toLowerCase()) && record.file_name && !record.file_name.endsWith('_flv.mp4');
       const keepForever = `<label class="keep-toggle"><input type="checkbox" data-keep-record="${escapeHTML(id ?? '')}"${id == null ? ' disabled' : ''}${pinned ? ' checked' : ''} aria-label="Keep ${escapeHTML(username)} forever"><span>Keep forever</span></label>`;
-      const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Details</a>${!isActive(record) ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete recording of ${escapeHTML(username)}">×</button></div>`;
+      const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Details</a>${playable ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete recording of ${escapeHTML(username)}">×</button></div>`;
       if (compact) return `<article class="record-card card"><div class="record-card-top"><strong>@${escapeHTML(username)}</strong><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></div><div class="record-card-meta"><span>${escapeHTML(formatDate(date))}</span><span>${escapeHTML(formatSize(size))}</span></div><div class="record-card-bottom">${keepForever}${actions}</div></article>`;
       return `<tr><td><a class="creator-link" href="/recordings/${encodeURIComponent(id)}">@${escapeHTML(username)}</a></td><td><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></td><td>${escapeHTML(formatDate(date))}</td><td>${escapeHTML(formatSize(size))}</td><td><div class="table-actions">${keepForever}${actions}</div></td></tr>`;
     };
@@ -249,8 +251,26 @@
         container.innerHTML = entries.length ? entries.map((item) => {
           const username = typeof item === 'string' ? item : item.username;
           const mode = typeof item === 'string' ? 'always' : (item.mode || 'always');
-          return `<article class="watch-card card"><div class="watch-avatar" aria-hidden="true">${escapeHTML((username || '@')[0].toUpperCase())}</div><div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'Always record' : 'Next live only'}</span></div><span class="badge badge-outline">${mode === 'always' ? 'ALWAYS' : 'ONCE'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" aria-label="Remove @${escapeHTML(username)} from watchlist">×</button></article>`;
+          const maxDuration = Number(item.max_duration_seconds || 14400);
+          const durationOptions = [[900, '15m'], [1800, '30m'], [3600, '1h'], [14400, '4h'], [28800, '8h']];
+          const maxControl = mode === 'always' ? `<label class="watch-max">Max / live<select data-watch-max="${escapeHTML(username)}" data-previous="${maxDuration}" aria-label="Maximum recording time for @${escapeHTML(username)}">${durationOptions.map(([seconds, label]) => `<option value="${seconds}"${maxDuration === seconds ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : '';
+          return `<article class="watch-card card"><div class="watch-avatar" aria-hidden="true">${escapeHTML((username || '@')[0].toUpperCase())}</div><div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'Always record' : 'Next live only'}</span></div>${maxControl}<span class="badge badge-outline">${mode === 'always' ? 'ALWAYS' : 'ONCE'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" aria-label="Remove @${escapeHTML(username)} from watchlist">×</button></article>`;
         }).join('') : '<div class="empty-card card">No creators yet. Add someone when they’re offline.</div>';
+        $$('[data-watch-max]', container).forEach((select) => select.addEventListener('change', async () => {
+          const previous = select.dataset.previous || '14400';
+          select.disabled = true;
+          try {
+            await api('/api/watchlist', {
+              method: 'POST',
+              body: JSON.stringify({ username: select.dataset.watchMax, mode: 'always', max_duration_seconds: Number(select.value) }),
+            });
+            loadWatchlist();
+          } catch (error) {
+            select.value = previous;
+            select.disabled = false;
+            window.alert(error.message || 'Could not update maximum recording time.');
+          }
+        }));
         $$('[data-remove-watch]', container).forEach((button) => button.addEventListener('click', async () => {
           button.disabled = true;
           try { await api(`/api/watchlist?username=${encodeURIComponent(button.dataset.removeWatch)}`, { method: 'DELETE' }); loadWatchlist(); }
@@ -283,6 +303,8 @@
       feedback.classList.toggle('alert-error', error);
     };
     let recording;
+    let refreshTimer;
+    const spaceWarning = $('[data-recording-space-warning]');
     async function load() {
       try {
         recording = await api(`/api/recordings/${encodeURIComponent(id)}`);
@@ -297,7 +319,10 @@
         $('[data-recording-time]').textContent = formatDuration(recording.elapsed_seconds ?? recording.duration_elapsed_seconds);
         $('[data-recording-size]').textContent = formatSize(recording.file_size_bytes ?? recording.size_bytes);
         $('[data-recording-estimate]').textContent = formatSize(recording.estimated_size_bytes ?? recording.estimated_total_bytes);
+        spaceWarning.textContent = recording.low_space_warning || '';
+        spaceWarning.hidden = !recording.low_space_warning;
         const active = isActive(recording);
+        const playable = ['completed', 'stopped'].includes(String(status).toLowerCase()) && recording.file_name && !recording.file_name.endsWith('_flv.mp4');
         $$('[data-duration]').forEach((button) => {
           const duration = button.dataset.duration === '' ? null : Number(button.dataset.duration);
           const selected = (recording.duration_seconds ?? null) === duration;
@@ -307,7 +332,9 @@
         });
         const play = $('[data-play-link]'); const download = $('[data-download-link]'); const stop = $('[data-stop-recording]');
         play.href = `/recordings/${encodeURIComponent(id)}/video`; download.href = `/recordings/${encodeURIComponent(id)}/download`;
-        play.hidden = active; download.hidden = active; stop.hidden = !active;
+        play.hidden = !playable; download.hidden = !playable; stop.hidden = !active;
+        if (active && !refreshTimer) refreshTimer = setInterval(load, 3000);
+        else if (!active && refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
       } catch (error) {
         $('[data-recording-title]').textContent = 'Recording unavailable';
         $('[data-recording-subtitle]').textContent = '';

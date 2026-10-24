@@ -147,4 +147,6 @@ dmypy.json
 
 # Application data and generated frontend assets
 /data/
+/state/
+/output/
 /src/web/static/app.css

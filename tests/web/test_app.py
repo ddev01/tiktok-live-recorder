@@ -46,6 +46,7 @@ def test_recording_offline_and_live_submission(tmp_path, monkeypatch):
     response = client.post("/api/recordings", json={"query": "@creator"})
     assert response.status_code == 200
     assert response.json == {"status": "offline", "username": "creator"}
+    assert app.extensions["tt_clipper_store"].recent_searches() == ["creator"]
 
     monkeypatch.setattr(app_module, "_resolve_live", lambda username: True)
     monkeypatch.setattr(
@@ -138,6 +139,12 @@ def test_duration_patch_and_watchlist_validation(tmp_path):
     )
     assert response.status_code == 201
     assert response.json["max_duration_seconds"] == 14400
+    response = client.post(
+        "/api/watchlist",
+        json={"username": "creator", "mode": "always", "max_duration_seconds": 28800},
+    )
+    assert response.status_code == 200
+    assert response.json["max_duration_seconds"] == 28800
 
 
 def test_video_endpoint_supports_byte_ranges_and_delete_is_db_scoped(tmp_path):
@@ -174,6 +181,23 @@ def test_video_endpoint_supports_byte_ranges_and_delete_is_db_scoped(tmp_path):
         outside_id = cursor.lastrowid
     assert client.get(f"/recordings/{outside_id}/video").status_code == 404
     assert outside.exists()
+
+
+def test_in_progress_flv_is_not_served_as_a_completed_mp4(tmp_path):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    partial = Path(app.config["RECORDINGS_DIR"]) / "TK_creator_live_flv.mp4"
+    partial.parent.mkdir(parents=True)
+    partial.write_bytes(b"partial flv data")
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, file_path) "
+            "VALUES ('creator', 'recording', 1, ?)",
+            (str(partial),),
+        )
+        recording_id = cursor.lastrowid
+
+    assert app.test_client().get(f"/recordings/{recording_id}/video").status_code == 404
 
 
 def test_system_reports_low_disk_warning(tmp_path, monkeypatch):
@@ -218,6 +242,10 @@ def test_recording_json_reports_growth_estimates_and_low_space_warning(
 
 
 def test_search_recent_list_returns_ten_usernames(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    for i in range(12):
+        store.remember_search(f"creator{i}", i)
     monkeypatch.setattr(
         app_module,
         "search_profiles",
@@ -231,10 +259,24 @@ def test_search_recent_list_returns_ten_usernames(tmp_path, monkeypatch):
             for i in range(12)
         ],
     )
-    response = make_app(tmp_path).test_client().get("/api/search?q=creator")
+    response = app.test_client().get("/api/search?q=creator")
     assert response.status_code == 200
     assert len(response.json["recent"]) == 10
     assert response.json["recent"][0] == "creator11"
+
+
+def test_empty_search_returns_recent_without_requesting_tiktok(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    store.remember_search("recent_user", time.time())
+    monkeypatch.setattr(
+        app_module,
+        "search_profiles",
+        lambda query: pytest.fail("empty search must not call TikTok"),
+    )
+    response = app.test_client().get("/api/search")
+    assert response.status_code == 200
+    assert response.json == {"recent": ["recent_user"], "results": []}
 
 
 def test_app_creation_does_not_initialize_storage_or_start_worker(

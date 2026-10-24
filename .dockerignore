@@ -12,3 +12,8 @@
 **/*.mp4
 **/*.flv
 **/recordings
+**/state
+**/output
+**/data
+**/*.sqlite*
+**/*.db

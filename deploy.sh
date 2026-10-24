@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-remote_path=${REMOTE_PATH:-/opt/tt-clipper}
+remote_path=${REMOTE_PATH:-__DEFAULT__}
 stack_name=${STACK_NAME:-tt-clipper}
 certresolver=${TRAEFIK_CERTRESOLVER:-letsencryptresolver}
 mode=deploy
@@ -20,14 +20,20 @@ remote_path=$1
 stack_name=$2
 certresolver=$3
 mode=$4
+if [[ $remote_path == __DEFAULT__ ]]; then
+  remote_path="$HOME/tt-clipper"
+fi
+if [[ $remote_path == '~/'* ]]; then
+  remote_path="$HOME/${remote_path#~/}"
+fi
 
 if [[ ! $stack_name =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
   echo "Invalid STACK_NAME '$stack_name' (use lowercase letters, digits, '-' or '_')." >&2
   exit 2
 fi
 if [[ ! -d $remote_path ]]; then
-  echo "App checkout not found at $remote_path." >&2
-  exit 1
+  mkdir -p "$(dirname "$remote_path")"
+  git clone --branch main https://github.com/ddev01/tiktok-live-recorder.git "$remote_path"
 fi
 cd "$remote_path"
 if [[ $(git rev-parse --show-toplevel) != "$(pwd -P)" ]]; then

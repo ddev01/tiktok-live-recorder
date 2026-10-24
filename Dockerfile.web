@@ -8,7 +8,7 @@ RUN bun run build
 
 FROM python:3.13-slim AS python-dependencies
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.7 /uv /bin/uv
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc g++ libffi-dev && \
@@ -30,11 +30,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /data/recordings
+    groupadd --system app && \
+    useradd --system --gid app --home-dir /app app && \
+    mkdir -p /data/recordings && \
+    chown -R app:app /data
 
 WORKDIR /app
 COPY --from=python-dependencies /app/.venv /app/.venv
 COPY --from=python-dependencies /app/src /app/src
 COPY --from=assets /app/src/web/static/ /app/src/web/static/
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "web.app:app"]
+WORKDIR /data
+USER app
+
+CMD ["gunicorn", "--workers", "3", "--no-control-socket", "--bind", "0.0.0.0:8000", "web.app:app"]

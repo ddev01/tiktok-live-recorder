@@ -14,7 +14,7 @@ from web.worker import LOW_DISK_BYTES, disk_status
 
 
 DEFAULT_DURATION = 1800
-ALLOWED_DURATIONS = {900, 1800, 3600, 14400}
+ALLOWED_DURATIONS = {900, 1800, 3600, 14400, 28800}
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,24}$")
 
 
@@ -26,7 +26,9 @@ def _duration(value, default=None):
         or not isinstance(value, int)
         or value not in ALLOWED_DURATIONS
     ):
-        raise ValueError("duration_seconds must be 900, 1800, 3600, 14400, or null")
+        raise ValueError(
+            "duration_seconds must be 900, 1800, 3600, 14400, 28800, or null"
+        )
     return value
 
 
@@ -149,12 +151,12 @@ def create_app(test_config=None):
     @app.get("/api/search")
     def search():
         query = request.args.get("q", "").strip()
-        if not query or len(query) > 100:
-            return jsonify(error="q must contain 1 to 100 characters"), 400
+        if len(query) > 100:
+            return jsonify(error="q must contain at most 100 characters"), 400
+        if not query:
+            return jsonify(recent=store.recent_searches(), results=[])
         try:
             results = search_profiles(query)
-            for profile in results:
-                store.remember_search(profile["username"], time.time())
             return jsonify(recent=store.recent_searches(), results=results)
         except Exception:
             return jsonify(
@@ -172,6 +174,7 @@ def create_app(test_config=None):
         except ValueError as error:
             return jsonify(error=str(error)), 400
 
+        store.remember_search(username, time.time())
         active = store.active_recording(username)
         if active:
             return jsonify(_recording_json(active, recordings_dir)), 200
@@ -327,6 +330,7 @@ def create_app(test_config=None):
                 raise ValueError("max_duration_seconds cannot be null")
         except ValueError as error:
             return jsonify(error=str(error)), 400
+        store.remember_search(username, time.time())
         with store.transaction() as connection:
             existing = connection.execute(
                 "SELECT * FROM watchlist WHERE username = ?", (username,)
@@ -354,7 +358,7 @@ def create_app(test_config=None):
                 )
             }
         return jsonify(
-            disk={**disk, "warning": disk["free_bytes"] < LOW_DISK_BYTES},
+            disk={**disk, "warning": disk["free_bytes"] <= LOW_DISK_BYTES},
             recordings=counts,
             active_recordings=sum(
                 counts.get(state, 0) for state in ("starting", "recording", "stopping")
@@ -363,10 +367,18 @@ def create_app(test_config=None):
 
     def video_response(recording_id, attachment):
         recording = store.recording(recording_id)
-        if not recording or not recording.get("file_path"):
+        if (
+            not recording
+            or recording["status"] not in ("completed", "stopped")
+            or not recording.get("file_path")
+        ):
             abort(404)
         path = Path(recording["file_path"]).resolve()
-        if not path.is_relative_to(recordings_dir) or not path.is_file():
+        if (
+            not path.is_relative_to(recordings_dir)
+            or not path.is_file()
+            or path.name.endswith("_flv.mp4")
+        ):
             abort(404)
         return send_file(
             path,

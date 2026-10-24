@@ -13,15 +13,24 @@ This deploys only this app as a Docker Swarm stack on the existing single VPS no
 
 The session cookie is supplied only through the existing external Swarm secret `tiktok_session_ss`; the stack maps it to `/run/secrets/tiktok_session_ss` and sets `TIKTOK_SESSION_SS_FILE`. Provision that secret separately before deployment. The deploy script only checks that it exists; it never creates or reads it. The application must not expose cookie values.
 
+Create it interactively on the VPS so the value is not put in Git or a command argument:
+
+```sh
+read -rs -p 'TikTok session_ss: ' SESSION_SS
+printf '\n'
+printf '%s' "$SESSION_SS" | docker secret create tiktok_session_ss -
+unset SESSION_SS
+```
+
 ## Deploy
 
-Run from this app checkout after its intended revision is available to the VPS checkout:
+Run from this app checkout. On first use the script clones the public `ddev01/tiktok-live-recorder` fork into `~/tt-clipper`; later runs fast-forward that checkout:
 
 ```sh
 ./deploy.sh
 ```
 
-The script connects using `ssh server`, fast-forwards only the app checkout at `/opt/tt-clipper`, builds `Dockerfile.web` on the VPS, validates the stack, deploys only the `tt-clipper` stack, and prints its service status. Configure `REMOTE_PATH`, `STACK_NAME`, or `TRAEFIK_CERTRESOLVER` in the environment to override those defaults. It does not copy `.env` files or secrets, run broad prune commands, or restart unrelated services.
+The script connects using `ssh server`, fast-forwards only the app checkout at `~/tt-clipper` by default, builds `Dockerfile.web` on the VPS, validates the stack, deploys only the `tt-clipper` stack, and prints its service status. Configure `REMOTE_PATH`, `STACK_NAME`, or `TRAEFIK_CERTRESOLVER` in the environment to override those defaults. It does not copy `.env` files or secrets, run broad prune commands, or restart unrelated services.
 
 To validate the current VPS checkout without pulling, building, or deploying:
 

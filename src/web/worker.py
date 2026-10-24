@@ -22,7 +22,7 @@ def disk_status(recordings_dir):
     return {
         "free_bytes": usage.free,
         "total_bytes": usage.total,
-        "low_disk": usage.free < LOW_DISK_BYTES,
+        "low_disk": usage.free <= LOW_DISK_BYTES,
     }
 
 
@@ -75,7 +75,7 @@ class RecordingWorker:
                     str(self.recordings_dir),
                     "-no-update-check",
                 ],
-                cwd=Path(__file__).resolve().parents[2],
+                cwd=self.recordings_dir.parent,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -289,7 +289,7 @@ class RecordingWorker:
 
     def _retention(self):
         cutoff = time.time() - RETENTION_SECONDS
-        with self.store.transaction() as connection:
+        with self.store.connect() as connection:
             expired = [
                 dict(row)
                 for row in connection.execute(
@@ -298,23 +298,47 @@ class RecordingWorker:
                     (cutoff,),
                 )
             ]
-            for row in expired:
-                connection.execute("DELETE FROM recordings WHERE id = ?", (row["id"],))
         for row in expired:
             path = Path(row["file_path"]).resolve() if row.get("file_path") else None
-            if path and path.is_relative_to(self.recordings_dir):
-                path.unlink(missing_ok=True)
+            if path:
+                if not path.is_relative_to(self.recordings_dir):
+                    continue
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    continue
+            with self.store.connect() as connection:
+                connection.execute("DELETE FROM recordings WHERE id = ?", (row["id"],))
 
     def recover_orphans(self):
         for recording in self._active_recordings():
-            if recording.get("pid") and recording["id"] not in self.processes:
-                self.stop_recording(recording["id"])
-            elif recording["status"] == "starting" and recording.get("worker_pid"):
+            if recording["status"] == "starting" and recording.get("worker_pid"):
                 with self.store.connect() as connection:
                     connection.execute(
                         "UPDATE recordings SET worker_pid = NULL WHERE id = ?",
                         (recording["id"],),
                     )
+            elif recording.get("pid") and recording["id"] not in self.processes:
+                # PIDs belong to the previous container namespace; never signal a reused PID.
+                output = self._find_output(
+                    recording["username"], recording["started_at"]
+                )
+                complete = bool(
+                    output
+                    and output.stat().st_size
+                    and not output.name.endswith("_flv.mp4")
+                )
+                # shortcut: crash-left partial FLV files need manual cleanup; add an orphan janitor if crashes recur.
+                self._finish(
+                    recording["id"],
+                    "stopped"
+                    if complete and recording["status"] == "stopping"
+                    else ("completed" if complete else "failed"),
+                    None
+                    if complete
+                    else "Worker restarted; partial output may need manual cleanup",
+                    output if complete else None,
+                )
 
     def run(self):
         try:

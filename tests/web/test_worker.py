@@ -217,3 +217,51 @@ def test_shutdown_signals_active_recorders_for_graceful_finalize(tmp_path, monke
     worker.shutdown()
     assert events == [("signal", worker_module.signal.SIGINT), ("wait",)]
     assert store.recording(1)["status"] == "failed"
+
+
+def test_recovery_never_signals_pid_from_a_previous_container(tmp_path, monkeypatch):
+    worker, store, _ = make_worker(tmp_path)
+    with store.connect() as connection:
+        connection.execute(
+            "INSERT INTO recordings(username, status, created_at, started_at, pid) "
+            "VALUES ('creator', 'recording', 1, 1, 98765)"
+        )
+    monkeypatch.setattr(
+        worker_module.os,
+        "kill",
+        lambda *args: pytest.fail("a persisted PID may have been reused"),
+    )
+
+    worker.recover_orphans()
+
+    recording = store.recordings()[0]
+    assert recording["status"] == "failed"
+    assert recording["pid"] is None
+    assert "partial output" in recording["error"]
+
+
+def test_retention_keeps_metadata_when_video_cannot_be_removed(tmp_path, monkeypatch):
+    worker, store, recordings_dir = make_worker(tmp_path)
+    old_time = time.time() - RETENTION_SECONDS - 10
+    video = recordings_dir / "locked.mp4"
+    video.write_bytes(b"video")
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, finished_at, file_path) "
+            "VALUES ('locked', 'completed', ?, ?, ?)",
+            (old_time, old_time, str(video)),
+        )
+        recording_id = cursor.lastrowid
+    original_unlink = Path.unlink
+
+    def fail_video_unlink(path, *args, **kwargs):
+        if path == video:
+            raise PermissionError
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_video_unlink)
+
+    worker._retention()
+
+    assert store.recording(recording_id) is not None
+    assert video.exists()
