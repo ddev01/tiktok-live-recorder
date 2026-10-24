@@ -121,7 +121,7 @@ PYTHONPATH=src uv run gunicorn --workers 3 --bind 127.0.0.1:8000 web.app:app
 PYTHONPATH=src uv run python -m web.worker
 ```
 
-The app stores its SQLite state and recordings under `state/` and `output/` by default. Set `TT_CLIPPER_DATABASE` and `RECORDINGS_DIR` to change those paths. To use a TikTok session cookie, set `TIKTOK_SESSION_SS_FILE` to a file containing it; keep that file out of Git and do not share it. Never paste the cookie into the dashboard.
+The app stores its SQLite state and recordings under `state/` and `output/` by default. Set `TT_CLIPPER_DATABASE` and `RECORDINGS_DIR` to change those paths. To use a TikTok session cookie, set `TIKTOK_SESSION_SS_FILE` to a Netscape-format cookie file; keep that file out of Git and do not share it. Never paste the cookie into the dashboard.
 
 The Docker Swarm deployment is documented in [docs/deploy.md](docs/deploy.md). It uses the existing Traefik IP allowlist and requires the `tiktok_session_ss` Swarm secret to be provisioned separately.
 

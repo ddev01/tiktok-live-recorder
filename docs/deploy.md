@@ -11,14 +11,14 @@ This deploys only this app as a Docker Swarm stack on the existing single VPS no
 - The existing Traefik resolver is named `letsencryptresolver` by default; override `TRAEFIK_CERTRESOLVER` if the infrastructure uses a different name. The router uses `websecure` and the existing `admin-allowlist@file` middleware.
 - DNS for `tt.peltux.xyz` must be DNS-only (not proxied) so the allowlist sees client IP addresses.
 
-The session cookie is supplied only through the existing external Swarm secret `tiktok_session_ss`; the stack maps it to `/run/secrets/tiktok_session_ss` and sets `TIKTOK_SESSION_SS_FILE`. Provision that secret separately before deployment. The deploy script only checks that it exists; it never creates or reads it. The application must not expose cookie values.
+The session cookie is supplied only through the existing external Swarm secret `tiktok_session_ss`; the stack maps it to `/run/secrets/tiktok_session_ss` and sets `TIKTOK_SESSION_SS_FILE`. It must be a Netscape HTTP Cookie File so Streamlink can read it without putting cookie values in process arguments. Provision that secret separately before deployment. The deploy script only checks that it exists; it never creates or reads it. The application must not expose cookie values.
 
 Create it interactively on the VPS so the value is not put in Git or a command argument:
 
 ```sh
-read -rs -p 'TikTok session_ss: ' SESSION_SS
+read -r -s -p 'TikTok session_ss: ' SESSION_SS
 printf '\n'
-printf '%s' "$SESSION_SS" | docker secret create tiktok_session_ss -
+printf '# Netscape HTTP Cookie File\n.tiktok.com\tTRUE\t/\tTRUE\t0\tsession_ss\t%s\n' "$SESSION_SS" | docker secret create tiktok_session_ss -
 unset SESSION_SS
 ```
 
