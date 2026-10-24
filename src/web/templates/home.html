@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Record a live{% endblock %}
+{% block content %}
+<section class="hero-section" aria-labelledby="hero-title">
+  <div class="eyebrow"><span class="live-dot" aria-hidden="true"></span> YOUR LIVE RECORDING DESK</div>
+  <h1 id="hero-title">Catch the live.<br><span>Keep the moment.</span></h1>
+  <p class="hero-copy">Find a creator and we’ll start recording as soon as they’re live.</p>
+
+  <form class="search-form" data-search-form role="search">
+    <label class="sr-only" for="creator-search">TikTok username or profile URL</label>
+    <div class="search-box">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span class="search-prefix" aria-hidden="true">@</span>
+      <input id="creator-search" name="query" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Search a username or paste a link" aria-controls="search-suggestions" aria-describedby="search-help" data-search-input>
+      <button class="btn btn-primary search-submit" type="submit"><span>Record</span><span aria-hidden="true">→</span></button>
+    </div>
+    <p id="search-help" class="search-help">Press enter to start a 30 minute recording. You can change this later.</p>
+  <div id="search-suggestions" class="suggestions card" role="region" aria-label="Search suggestions" hidden data-suggestions></div>
+  </form>
+  <div class="feedback alert" role="status" aria-live="polite" hidden data-home-feedback></div>
+  <div class="offline-actions" hidden data-offline-actions>
+    <p>Not live right now. Want us to catch the next one?</p>
+    <div class="button-row">
+      <button class="btn btn-secondary" type="button" data-watch-mode="once">Record next live</button>
+      <button class="btn btn-outline" type="button" data-watch-mode="always">Always record</button>
+    </div>
+  </div>
+</section>
+<section class="home-footnote" aria-label="How recording works">
+  <div><span class="step-number">01</span><span>Search a creator</span></div>
+  <span class="step-line" aria-hidden="true"></span>
+  <div><span class="step-number">02</span><span>We check if they’re live</span></div>
+  <span class="step-line" aria-hidden="true"></span>
+  <div><span class="step-number">03</span><span>Your recording is ready</span></div>
+</section>
+{% endblock %}
