@@ -103,6 +103,10 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
+.node_modules/
+node_modules/
 .venv
 env/
 venv/
@@ -140,3 +144,7 @@ dmypy.json
 
 .idea/
 .vscode/
+
+# Application data and generated frontend assets
+/data/
+/src/web/static/app.css

@@ -1,0 +1,12 @@
+{
+  "name": "tt-clipper-assets",
+  "private": true,
+  "scripts": {
+    "build": "tailwindcss -i ./ui/app.css -o ./src/web/static/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "daisyui": "^5.0.0",
+    "tailwindcss": "^4.1.0"
+  }
+}
