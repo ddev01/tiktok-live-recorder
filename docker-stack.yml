@@ -6,6 +6,8 @@ services:
     command: ["gunicorn", "--bind", "0.0.0.0:8000", "web.app:app"]
     environment:
       PYTHONPATH: /app/src
+      TT_CLIPPER_DATABASE: /data/tt-clipper.sqlite3
+      RECORDINGS_DIR: /data/recordings
       TIKTOK_SESSION_SS_FILE: /run/secrets/tiktok_session_ss
     volumes:
       - recorder-data:/data
@@ -35,6 +37,8 @@ services:
     command: ["python", "-m", "web.worker"]
     environment:
       PYTHONPATH: /app/src
+      TT_CLIPPER_DATABASE: /data/tt-clipper.sqlite3
+      RECORDINGS_DIR: /data/recordings
       TIKTOK_SESSION_SS_FILE: /run/secrets/tiktok_session_ss
     volumes:
       - recorder-data:/data
