@@ -6,8 +6,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, abort, jsonify, render_template, request, send_file
 
-from core.tiktok_api import TikTokAPI
-from utils.utils import read_cookies
+from web.capture import is_live
 from web.search import search_profiles
 from web.store import Store
 from web.worker import LOW_DISK_BYTES, disk_status
@@ -57,8 +56,17 @@ def _recording_json(recording, recordings_dir):
     result = dict(recording)
     result["keep_forever"] = bool(result["keep_forever"])
     path = Path(result["file_path"]).resolve() if result.get("file_path") else None
+    in_recordings_dir = bool(path and path.is_relative_to(recordings_dir))
     size_bytes = 0
-    if path and path.is_relative_to(recordings_dir) and path.is_file():
+    finalized_interrupted = result.get("status") != "interrupted" or bool(
+        result.get("finished_at")
+        and in_recordings_dir
+        and path.suffix.lower() == ".mp4"
+        and not path.name.endswith("_flv.mp4")
+        and path.is_file()
+        and path.stat().st_size > 0
+    )
+    if in_recordings_dir and path.is_file() and finalized_interrupted:
         result["file_name"] = path.name
         size_bytes = path.stat().st_size
     else:
@@ -114,9 +122,7 @@ def _recording_json(recording, recordings_dir):
 
 
 def _resolve_live(username):
-    api = TikTokAPI(proxy=None, cookies=read_cookies())
-    room_id = api.get_room_id_from_user(username)
-    return bool(room_id and api.is_room_alive(room_id))
+    return is_live(username)
 
 
 def create_app(test_config=None):
@@ -369,7 +375,7 @@ def create_app(test_config=None):
         recording = store.recording(recording_id)
         if (
             not recording
-            or recording["status"] not in ("completed", "stopped")
+            or recording["status"] not in ("completed", "stopped", "interrupted")
             or not recording.get("file_path")
         ):
             abort(404)
@@ -378,6 +384,12 @@ def create_app(test_config=None):
             not path.is_relative_to(recordings_dir)
             or not path.is_file()
             or path.name.endswith("_flv.mp4")
+            or path.suffix.lower() != ".mp4"
+            or path.stat().st_size == 0
+            or (
+                recording["status"] == "interrupted"
+                and not recording.get("finished_at")
+            )
         ):
             abort(404)
         return send_file(

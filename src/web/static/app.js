@@ -42,7 +42,7 @@
   };
   const statusClass = (status) => ({
     active: 'badge-success', recording: 'badge-success', completed: 'badge-neutral',
-    stopped: 'badge-neutral', failed: 'badge-error', error: 'badge-error',
+    stopped: 'badge-neutral', interrupted: 'badge-error', failed: 'badge-error', error: 'badge-error',
   })[String(status || '').toLowerCase()] || 'badge-neutral';
   const recordId = (record) => record.id ?? record.recording_id;
   const recordStatus = (record) => record.status || (record.is_active ? 'recording' : 'completed');
@@ -199,9 +199,9 @@
       const date = record.started_at || record.created_at || record.date;
       const size = record.file_size_bytes ?? record.size_bytes;
       const pinned = record.keep_forever ?? record.pinned ?? false;
-      const playable = ['completed', 'stopped'].includes(String(status).toLowerCase()) && record.file_name && !record.file_name.endsWith('_flv.mp4');
+      const playable = ['completed', 'stopped', 'interrupted'].includes(String(status).toLowerCase()) && record.file_name && !record.file_name.endsWith('_flv.mp4');
       const keepForever = `<label class="keep-toggle"><input type="checkbox" data-keep-record="${escapeHTML(id ?? '')}"${id == null ? ' disabled' : ''}${pinned ? ' checked' : ''} aria-label="Keep ${escapeHTML(username)} forever"><span>Keep forever</span></label>`;
-      const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Details</a>${playable ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete recording of ${escapeHTML(username)}">×</button></div>`;
+      const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Details</a>${playable ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${status === 'interrupted' ? 'partial recording of' : ''} ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${status === 'interrupted' ? 'partial recording of' : ''} ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete recording of ${escapeHTML(username)}">×</button></div>`;
       if (compact) return `<article class="record-card card"><div class="record-card-top"><strong>@${escapeHTML(username)}</strong><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></div><div class="record-card-meta"><span>${escapeHTML(formatDate(date))}</span><span>${escapeHTML(formatSize(size))}</span></div><div class="record-card-bottom">${keepForever}${actions}</div></article>`;
       return `<tr><td><a class="creator-link" href="/recordings/${encodeURIComponent(id)}">@${escapeHTML(username)}</a></td><td><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></td><td>${escapeHTML(formatDate(date))}</td><td>${escapeHTML(formatSize(size))}</td><td><div class="table-actions">${keepForever}${actions}</div></td></tr>`;
     };
@@ -322,7 +322,7 @@
         spaceWarning.textContent = recording.low_space_warning || '';
         spaceWarning.hidden = !recording.low_space_warning;
         const active = isActive(recording);
-        const playable = ['completed', 'stopped'].includes(String(status).toLowerCase()) && recording.file_name && !recording.file_name.endsWith('_flv.mp4');
+        const playable = ['completed', 'stopped', 'interrupted'].includes(String(status).toLowerCase()) && recording.file_name && !recording.file_name.endsWith('_flv.mp4');
         $$('[data-duration]').forEach((button) => {
           const duration = button.dataset.duration === '' ? null : Number(button.dataset.duration);
           const selected = (recording.duration_seconds ?? null) === duration;
@@ -332,6 +332,12 @@
         });
         const play = $('[data-play-link]'); const download = $('[data-download-link]'); const stop = $('[data-stop-recording]');
         play.href = `/recordings/${encodeURIComponent(id)}/video`; download.href = `/recordings/${encodeURIComponent(id)}/download`;
+        if (recording.error) showFeedback(recording.error, true);
+        if (status === 'interrupted') {
+          play.innerHTML = '▶ <span>Play partial recording</span>';
+          download.innerHTML = '↓ <span>Download partial recording</span>';
+          if (!recording.error) showFeedback('Stream interrupted; a playable partial recording was saved.', true);
+        }
         play.hidden = !playable; download.hidden = !playable; stop.hidden = !active;
         if (active && !refreshTimer) refreshTimer = setInterval(load, 3000);
         else if (!active && refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }

@@ -27,7 +27,7 @@ def test_low_disk_blocks_recording_before_starting_a_child(tmp_path, monkeypatch
         lambda: {"free_bytes": LOW_DISK_BYTES - 1, "low_disk": True},
     )
     monkeypatch.setattr(
-        "web.worker.subprocess.Popen",
+        "web.worker.StreamCapture",
         lambda *args, **kwargs: pytest.fail("must not start with low disk"),
     )
     recording = worker.enqueue("creator")
@@ -48,7 +48,7 @@ def test_http_queue_is_started_only_by_worker_service(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr(worker, "disk_status", lambda: {"low_disk": False})
-    monkeypatch.setattr("web.worker.subprocess.Popen", lambda *args, **kwargs: Child())
+    monkeypatch.setattr("web.worker.StreamCapture", lambda *args, **kwargs: Child())
     worker.launch_pending()
     started = store.recording(recording["id"])
     assert started["status"] == "recording"
@@ -97,9 +97,9 @@ def test_low_disk_gracefully_stops_an_active_child(tmp_path):
     assert store.recording(recording_id)["status"] == "stopping"
 
 
-def test_worker_discovers_growing_flv_file_for_recording_detail(tmp_path):
+def test_worker_does_not_publish_in_progress_mp4(tmp_path):
     worker, store, recordings_dir = make_worker(tmp_path)
-    output = recordings_dir / "TK_creator_2026.01.01_00-00-00_flv.mp4"
+    output = recordings_dir / "TK_creator_2026.01.01_00-00-00_web_1.mp4"
     output.write_bytes(b"growing video")
     with store.connect() as connection:
         cursor = connection.execute(
@@ -116,7 +116,69 @@ def test_worker_discovers_growing_flv_file_for_recording_detail(tmp_path):
     worker.processes[recording_id] = Child()
     worker.disk_status = lambda: {"low_disk": False}
     worker._monitor()
-    assert store.recording(recording_id)["file_path"] == str(output)
+    assert store.recording(recording_id)["file_path"] is None
+
+
+def test_interrupted_stream_keeps_finalized_partial_mp4(tmp_path):
+    worker, store, recordings_dir = make_worker(tmp_path)
+    output = recordings_dir / "TK_creator_2026.01.01_web_1.mp4"
+    output.write_bytes(b"finalized partial video")
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, started_at, pid) "
+            "VALUES ('creator', 'recording', 1, 1, 456)"
+        )
+        recording_id = cursor.lastrowid
+
+    class InterruptedCapture:
+        def __init__(self):
+            self.output = output
+            self.finalized = True
+            self.interrupted = True
+
+        def poll(self):
+            return 1
+
+        def wait(self):
+            return 0
+
+    worker.processes[recording_id] = InterruptedCapture()
+    worker.disk_status = lambda: {"low_disk": False}
+    worker._monitor()
+
+    recording = store.recording(recording_id)
+    assert recording["status"] == "interrupted"
+    assert recording["file_path"] == str(output)
+    assert "playable partial" in recording["error"]
+
+
+def test_interrupted_stream_without_finalized_mp4_is_failed(tmp_path):
+    worker, store, recordings_dir = make_worker(tmp_path)
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, started_at, pid) "
+            "VALUES ('creator', 'recording', 1, 1, 456)"
+        )
+        recording_id = cursor.lastrowid
+
+    class InterruptedCapture:
+        output = recordings_dir / "missing.mp4"
+        finalized = False
+        interrupted = True
+
+        def poll(self):
+            return 1
+
+        def wait(self):
+            return 0
+
+    worker.processes[recording_id] = InterruptedCapture()
+    worker.disk_status = lambda: {"low_disk": False}
+    worker._monitor()
+
+    recording = store.recording(recording_id)
+    assert recording["status"] == "failed"
+    assert recording["file_path"] is None
 
 
 def test_worker_reads_persisted_duration_changes_each_poll(tmp_path, monkeypatch):
@@ -148,8 +210,10 @@ def test_retention_deletes_old_unpinned_video_but_keeps_keep_forever(tmp_path):
     old_time = time.time() - RETENTION_SECONDS - 10
     removed = recordings_dir / "old.mp4"
     kept = recordings_dir / "kept.mp4"
+    interrupted = recordings_dir / "interrupted.mp4"
     removed.write_bytes(b"video")
     kept.write_bytes(b"video")
+    interrupted.write_bytes(b"video")
     with store.connect() as connection:
         connection.execute(
             "INSERT INTO recordings(username, status, created_at, finished_at, file_path) "
@@ -161,8 +225,14 @@ def test_retention_deletes_old_unpinned_video_but_keeps_keep_forever(tmp_path):
             "VALUES ('kept', 'completed', ?, ?, ?, 1)",
             (old_time, old_time, str(kept)),
         )
+        connection.execute(
+            "INSERT INTO recordings(username, status, created_at, finished_at, file_path) "
+            "VALUES ('interrupted', 'interrupted', ?, ?, ?)",
+            (old_time, old_time, str(interrupted)),
+        )
     worker._retention()
     assert not removed.exists()
+    assert not interrupted.exists()
     assert kept.exists()
     assert [item["username"] for item in store.recordings()] == ["kept"]
 

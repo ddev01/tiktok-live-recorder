@@ -1,12 +1,11 @@
 import os
 import shutil
 import signal
-import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
 
+from web.capture import StreamCapture
 from web.store import Store
 
 
@@ -64,23 +63,11 @@ class RecordingWorker:
             self._finish(recording_id, "failed", "Recording blocked below 2 GB free")
             return False
 
+        output = self.recordings_dir / (
+            f"TK_{username}_{time.strftime('%Y.%m.%d_%H-%M-%S')}_web_{recording_id}.mp4"
+        )
         try:
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    str(Path(__file__).resolve().parents[1] / "main.py"),
-                    "-user",
-                    username,
-                    "-output",
-                    str(self.recordings_dir),
-                    "-no-update-check",
-                ],
-                cwd=self.recordings_dir.parent,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+            process = StreamCapture(username, output)
         except OSError:
             self._finish(recording_id, "failed", "Could not start recorder process")
             return False
@@ -146,18 +133,57 @@ class RecordingWorker:
                 )
             ]
 
-    def _find_output(self, username, started_at):
-        candidates = sorted(
-            self.recordings_dir.glob(f"TK_{username}_*.mp4"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        return next(
-            (path for path in candidates if path.stat().st_mtime >= (started_at or 0)),
-            None,
+    def _capture_output(self, recording):
+        process = self.processes.get(recording["id"])
+        return process.output if process and hasattr(process, "output") else None
+
+    @staticmethod
+    def _has_finalized_video(process, output):
+        if process and hasattr(process, "finalized"):
+            return process.finalized
+        return bool(
+            output
+            and output.is_file()
+            and output.stat().st_size
+            and not output.name.endswith("_flv.mp4")
         )
 
+    def _finish_capture(self, recording, process):
+        output = self._capture_output(recording)
+        has_video = self._has_finalized_video(process, output)
+        interrupted = bool(process and getattr(process, "interrupted", False))
+        if recording["status"] == "stopping":
+            status, error = (
+                ("stopped", None)
+                if has_video
+                else ("failed", "Recorder stopped without finalizing an MP4")
+            )
+        elif interrupted and has_video:
+            # shortcut: Streamlink cannot reconnect opened HTTP-FLV; upgrade only with safe continuation, never by appending into this MP4.
+            status, error = (
+                "interrupted",
+                "Streamlink lost the active stream; a playable partial recording was saved",
+            )
+        elif has_video:
+            status, error = "completed", None
+        else:
+            status, error = "failed", "Recorder exited without finalizing an MP4"
+        self._finish(recording["id"], status, error, output if has_video else None)
+
     def _finish(self, recording_id, status, error=None, output=None):
+        if status == "interrupted":
+            path = Path(output).resolve() if output else None
+            if (
+                not path
+                or not path.is_relative_to(self.recordings_dir)
+                or not path.is_file()
+                or path.suffix.lower() != ".mp4"
+                or path.name.endswith("_flv.mp4")
+                or path.stat().st_size == 0
+            ):
+                status = "failed"
+                error = "Stream was interrupted before a playable MP4 was finalized"
+                output = None
         with self.store.connect() as connection:
             connection.execute(
                 "UPDATE recordings SET status = ?, finished_at = ?, file_path = ?, "
@@ -207,28 +233,11 @@ class RecordingWorker:
                 self.stop_recording(recording["id"])
                 recording["status"] = "stopping"
 
-            output = self._find_output(recording["username"], recording["started_at"])
-            if output and output != recording.get("file_path"):
-                with self.store.connect() as connection:
-                    connection.execute(
-                        "UPDATE recordings SET file_path = ? WHERE id = ?",
-                        (str(output), recording["id"]),
-                    )
-
             if self._process_exited(recording):
-                output = self._find_output(
-                    recording["username"], recording["started_at"]
-                )
-                finished_status = (
-                    "stopped" if recording["status"] == "stopping" else "completed"
-                )
-                has_video = bool(output and output.stat().st_size)
-                self._finish(
-                    recording["id"],
-                    finished_status if has_video else "failed",
-                    None if has_video else "Recorder exited without producing a video",
-                    output if has_video else None,
-                )
+                process = self.processes.get(recording["id"])
+                if process:
+                    process.wait()
+                self._finish_capture(recording, process)
 
     def _queue_watch(self, watch):
         if self.disk_status()["low_disk"]:
@@ -293,7 +302,7 @@ class RecordingWorker:
             expired = [
                 dict(row)
                 for row in connection.execute(
-                    "SELECT * FROM recordings WHERE status IN ('completed', 'failed', 'stopped') "
+                    "SELECT * FROM recordings WHERE status IN ('completed', 'failed', 'stopped', 'interrupted') "
                     "AND keep_forever = 0 AND finished_at < ?",
                     (cutoff,),
                 )
@@ -320,24 +329,11 @@ class RecordingWorker:
                     )
             elif recording.get("pid") and recording["id"] not in self.processes:
                 # PIDs belong to the previous container namespace; never signal a reused PID.
-                output = self._find_output(
-                    recording["username"], recording["started_at"]
-                )
-                complete = bool(
-                    output
-                    and output.stat().st_size
-                    and not output.name.endswith("_flv.mp4")
-                )
-                # shortcut: crash-left partial FLV files need manual cleanup; add an orphan janitor if crashes recur.
+                # A worker restart cannot prove the orphan MP4 was finalized, so leave it unlinked.
                 self._finish(
                     recording["id"],
-                    "stopped"
-                    if complete and recording["status"] == "stopping"
-                    else ("completed" if complete else "failed"),
-                    None
-                    if complete
-                    else "Worker restarted; partial output may need manual cleanup",
-                    output if complete else None,
+                    "failed",
+                    "Worker restarted; partial output may need manual cleanup",
                 )
 
     def run(self):
@@ -363,16 +359,7 @@ class RecordingWorker:
             process.wait()
             recording = self.store.recording(recording_id)
             if recording:
-                output = self._find_output(
-                    recording["username"], recording["started_at"]
-                )
-                has_video = bool(output and output.stat().st_size)
-                self._finish(
-                    recording_id,
-                    "stopped" if has_video else "failed",
-                    None if has_video else "Recorder exited without producing a video",
-                    output if has_video else None,
-                )
+                self._finish_capture(recording, process)
         for recording in self._active_recordings():
             if recording.get("pid") and recording["id"] not in self.processes:
                 while True:
@@ -381,15 +368,10 @@ class RecordingWorker:
                     except ProcessLookupError:
                         break
                     time.sleep(0.2)
-                output = self._find_output(
-                    recording["username"], recording["started_at"]
-                )
-                has_video = bool(output and output.stat().st_size)
                 self._finish(
                     recording["id"],
-                    "stopped" if has_video else "failed",
-                    None if has_video else "Recorder exited without producing a video",
-                    output if has_video else None,
+                    "failed",
+                    "Worker restarted; partial output may need manual cleanup",
                 )
             elif recording["status"] == "stopping" and not recording.get("pid"):
                 self._finish(
@@ -408,12 +390,9 @@ class RecordingWorker:
 
 
 def _is_live(username):
-    from core.tiktok_api import TikTokAPI
-    from utils.utils import read_cookies
+    from web.capture import is_live
 
-    api = TikTokAPI(proxy=None, cookies=read_cookies())
-    room_id = api.get_room_id_from_user(username)
-    return bool(room_id and api.is_room_alive(room_id))
+    return is_live(username)
 
 
 def main():

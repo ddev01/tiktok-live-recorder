@@ -28,6 +28,18 @@ def test_cookie_loader_parses_cookie_header_secret(tmp_path, monkeypatch):
     assert all(isinstance(value, str) for value in cookies.values())
 
 
+def test_cookie_loader_parses_netscape_cookie_file(tmp_path, monkeypatch):
+    secret = tmp_path / "session"
+    secret.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".tiktok.com\tTRUE\t/\tTRUE\t0\tsession_ss\ttest-only-cookie\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TIKTOK_SESSION_SS_FILE", str(secret))
+
+    assert utils.read_cookies() == {"session_ss": "test-only-cookie"}
+
+
 def test_cookie_loader_keeps_cli_config_fallback_when_secret_missing(
     tmp_path, monkeypatch
 ):
