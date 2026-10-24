@@ -1,0 +1,40 @@
+FROM oven/bun:1.4.0-alpine AS assets
+
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY . .
+RUN bun run build
+
+FROM python:3.13-slim AS python-dependencies
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc g++ libffi-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY src ./src
+RUN uv sync --frozen --extra web --no-dev
+
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app/src \
+    TIKTOK_SESSION_SS_FILE=/run/secrets/tiktok_session_ss
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /data/recordings
+
+WORKDIR /app
+COPY --from=python-dependencies /app/.venv /app/.venv
+COPY --from=python-dependencies /app/src /app/src
+COPY --from=assets /app/src/web/static/ /app/src/web/static/
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "web.app:app"]
