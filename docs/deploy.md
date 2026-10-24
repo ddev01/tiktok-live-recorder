@@ -1,0 +1,32 @@
+# VPS deployment
+
+This deploys only this app as a Docker Swarm stack on the existing single VPS node. It does not modify the shared infrastructure stack or copy local files to the server.
+
+## Assumptions
+
+- The checkout has the Flask/Jinja app in `src/web`, with `web.app:app` and `web.worker` entry points.
+- A root `package.json` and `package-lock.json` exist; `npm run build` writes compiled CSS to `src/web/static/app.css`. The image copies the generated `src/web/static/` tree into the runtime image.
+- The Python project and lockfile include Flask, Gunicorn, and the app dependencies in the `web` extra. The Python image uses `uv sync --frozen --extra web --no-dev` and includes `ffmpeg`.
+- The app stores its SQLite database under `/data` and recordings under `/data/recordings`. Both services mount one local named volume and are constrained to the same Swarm node so SQLite WAL remains on the same local filesystem. Keep one web replica and one worker.
+- The existing Traefik resolver is named `letsencryptresolver` by default; override `TRAEFIK_CERTRESOLVER` if the infrastructure uses a different name. The router uses `websecure` and the existing `admin-allowlist@file` middleware.
+- DNS for `tt.peltux.xyz` must be DNS-only (not proxied) so the allowlist sees client IP addresses.
+
+The session cookie is supplied only through the existing external Swarm secret `tiktok_session_ss`; the stack maps it to `/run/secrets/tiktok_session_ss` and sets `TIKTOK_SESSION_SS_FILE`. Provision that secret separately before deployment. The deploy script only checks that it exists; it never creates or reads it. The application must not expose cookie values.
+
+## Deploy
+
+Run from this app checkout after its intended revision is available to the VPS checkout:
+
+```sh
+./deploy.sh
+```
+
+The script connects using `ssh server`, fast-forwards only the app checkout at `/opt/tt-clipper`, builds `Dockerfile.web` on the VPS, validates the stack, deploys only the `tt-clipper` stack, and prints its service status. Configure `REMOTE_PATH`, `STACK_NAME`, or `TRAEFIK_CERTRESOLVER` in the environment to override those defaults. It does not copy `.env` files or secrets, run broad prune commands, or restart unrelated services.
+
+To validate the current VPS checkout without pulling, building, or deploying:
+
+```sh
+./deploy.sh --validate
+```
+
+Validation requires SSH access, an active Swarm, the external `infra-public` network, and the pre-existing `tiktok_session_ss` secret.

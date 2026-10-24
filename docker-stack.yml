@@ -1,0 +1,63 @@
+version: "3.8"
+
+services:
+  web:
+    image: ${STACK_NAME:-tt-clipper}:${IMAGE_TAG:?IMAGE_TAG must be set}
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "web.app:app"]
+    environment:
+      PYTHONPATH: /app/src
+      TIKTOK_SESSION_SS_FILE: /run/secrets/tiktok_session_ss
+    volumes:
+      - recorder-data:/data
+    secrets:
+      - tiktok_session_ss
+    networks:
+      - infra-public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME:-server}
+      restart_policy:
+        condition: on-failure
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=infra-public
+        - traefik.http.routers.${STACK_NAME:-tt-clipper}-web.rule=Host(`tt.peltux.xyz`)
+        - traefik.http.routers.${STACK_NAME:-tt-clipper}-web.entrypoints=websecure
+        - traefik.http.routers.${STACK_NAME:-tt-clipper}-web.tls=true
+        - traefik.http.routers.${STACK_NAME:-tt-clipper}-web.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencryptresolver}
+        - traefik.http.routers.${STACK_NAME:-tt-clipper}-web.middlewares=admin-allowlist@file
+        - traefik.http.services.${STACK_NAME:-tt-clipper}-web.loadbalancer.server.port=8000
+
+  worker:
+    image: ${STACK_NAME:-tt-clipper}:${IMAGE_TAG:?IMAGE_TAG must be set}
+    command: ["python", "-m", "web.worker"]
+    environment:
+      PYTHONPATH: /app/src
+      TIKTOK_SESSION_SS_FILE: /run/secrets/tiktok_session_ss
+    volumes:
+      - recorder-data:/data
+    secrets:
+      - tiktok_session_ss
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${NODE_HOSTNAME:-server}
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  recorder-data:
+    driver: local
+
+networks:
+  infra-public:
+    external: true
+    name: infra-public
+
+secrets:
+  tiktok_session_ss:
+    external: true
+    name: tiktok_session_ss
