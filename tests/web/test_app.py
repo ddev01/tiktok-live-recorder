@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 import pytest
+import streamlink
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -50,7 +51,7 @@ def test_recording_offline_and_live_submission(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_module, "_resolve_live", lambda username: True)
     monkeypatch.setattr(
-        "web.worker.subprocess.Popen",
+        "web.worker.StreamCapture",
         lambda *args, **kwargs: pytest.fail(
             "HTTP app must not start recorder children"
         ),
@@ -64,6 +65,39 @@ def test_recording_offline_and_live_submission(tmp_path, monkeypatch):
     assert response.json["status"] == "starting"
     assert response.json["duration_seconds"] == 900
     assert "pid" not in response.json
+
+
+def test_recording_live_check_uses_streamlink_without_network(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    calls = []
+    state = {"streams": {}}
+    cookie_path = tmp_path / "cookies.txt"
+    cookie_path.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("TIKTOK_SESSION_SS_FILE", str(cookie_path))
+
+    class FakeStreamlink:
+        def __init__(self):
+            self.http = type("FakeHTTP", (), {"set_cookies_from_file": calls.append})()
+
+        def streams(self, url):
+            calls.append(url)
+            return state["streams"]
+
+    monkeypatch.setattr(streamlink, "Streamlink", FakeStreamlink)
+    client = app.test_client()
+    response = client.post("/api/recordings", json={"query": "creator"})
+    assert response.json == {"status": "offline", "username": "creator"}
+
+    state["streams"] = {"best": object()}
+    response = client.post("/api/recordings", json={"query": "creator"})
+    assert response.status_code == 201
+    assert response.json["status"] == "starting"
+    assert calls == [
+        str(cookie_path),
+        "https://www.tiktok.com/@creator/live",
+        str(cookie_path),
+        "https://www.tiktok.com/@creator/live",
+    ]
 
 
 def test_duplicate_returns_existing_active_recording(tmp_path, monkeypatch):
@@ -198,6 +232,71 @@ def test_in_progress_flv_is_not_served_as_a_completed_mp4(tmp_path):
         recording_id = cursor.lastrowid
 
     assert app.test_client().get(f"/recordings/{recording_id}/video").status_code == 404
+
+
+def test_interrupted_partial_mp4_is_playable_only_after_worker_finishes(tmp_path):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    video = Path(app.config["RECORDINGS_DIR"]) / "partial.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"partial video")
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, finished_at, file_path, error) "
+            "VALUES ('creator', 'interrupted', 1, 2, ?, 'stream interrupted')",
+            (str(video),),
+        )
+        recording_id = cursor.lastrowid
+    client = app.test_client()
+    assert client.get(f"/recordings/{recording_id}/video").data == b"partial video"
+
+    with store.connect() as connection:
+        connection.execute(
+            "UPDATE recordings SET status = 'recording', finished_at = NULL "
+            "WHERE id = ?",
+            (recording_id,),
+        )
+    assert client.get(f"/recordings/{recording_id}/video").status_code == 404
+
+
+def test_interrupted_finalized_mp4_is_visible_and_playable(tmp_path):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    partial = Path(app.config["RECORDINGS_DIR"]) / "partial.mp4"
+    partial.parent.mkdir(parents=True)
+    partial.write_bytes(b"finalized partial mp4")
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, finished_at, "
+            "file_path, error) VALUES ('creator', 'interrupted', 1, 2, ?, ?)",
+            (str(partial), "Streamlink lost the active stream"),
+        )
+        recording_id = cursor.lastrowid
+
+    client = app.test_client()
+    detail = client.get(f"/api/recordings/{recording_id}").json
+    assert detail["status"] == "interrupted"
+    assert detail["file_name"] == "partial.mp4"
+    assert detail["error"] == "Streamlink lost the active stream"
+    assert client.get(f"/recordings/{recording_id}/video").status_code == 200
+    assert client.delete(f"/api/recordings/{recording_id}").status_code == 204
+
+
+def test_interrupted_record_without_finalized_mp4_is_not_exposed(tmp_path):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    path = Path(app.config["RECORDINGS_DIR"]) / "missing.mp4"
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, finished_at, file_path) "
+            "VALUES ('creator', 'interrupted', 1, 2, ?)",
+            (str(path),),
+        )
+        recording_id = cursor.lastrowid
+
+    client = app.test_client()
+    assert client.get(f"/api/recordings/{recording_id}").json["file_name"] is None
+    assert client.get(f"/recordings/{recording_id}/video").status_code == 404
 
 
 def test_system_reports_low_disk_warning(tmp_path, monkeypatch):

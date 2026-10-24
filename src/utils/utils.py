@@ -1,6 +1,7 @@
 import json
 import os
 from http.cookies import SimpleCookie
+from http.cookiejar import LoadError, MozillaCookieJar
 
 from utils.enums import Info
 
@@ -20,6 +21,16 @@ def read_cookies():
         "TIKTOK_SESSION_SS_FILE", "/run/secrets/tiktok_session_ss"
     )
     if os.path.isfile(secret_path):
+        with open(secret_path, "r", encoding="utf-8") as f:
+            header = f.readline().strip()
+        if header in ("# Netscape HTTP Cookie File", "# HTTP Cookie File"):
+            jar = MozillaCookieJar()
+            try:
+                jar.load(secret_path, ignore_discard=True, ignore_expires=True)
+            except (LoadError, OSError):
+                return {}
+            return {cookie.name: cookie.value for cookie in jar}
+
         with open(secret_path, "r", encoding="utf-8") as f:
             value = f.read().strip()
         try:
