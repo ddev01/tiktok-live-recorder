@@ -110,8 +110,8 @@ For local development, install the Python web extra and build the dashboard asse
 
 ```bash
 uv sync --extra web
-bun install --frozen-lockfile
-bun run build
+bun install --no-env-file --frozen-lockfile
+bun --no-env-file run build
 ```
 
 Run the web app and recording worker in separate terminals:
