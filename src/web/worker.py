@@ -75,8 +75,9 @@ class RecordingWorker:
         with self.store.connect() as connection:
             connection.execute(
                 "UPDATE recordings SET status = CASE WHEN status = 'starting' "
-                "THEN 'recording' ELSE status END, started_at = ?, pid = ? WHERE id = ?",
-                (time.time(), process.pid, recording_id),
+                "THEN 'recording' ELSE status END, started_at = ?, pid = ?, "
+                "file_path = ? WHERE id = ?",
+                (time.time(), process.pid, str(output), recording_id),
             )
             status = connection.execute(
                 "SELECT status FROM recordings WHERE id = ?", (recording_id,)
@@ -329,11 +330,18 @@ class RecordingWorker:
                     )
             elif recording.get("pid") and recording["id"] not in self.processes:
                 # PIDs belong to the previous container namespace; never signal a reused PID.
-                # A worker restart cannot prove the orphan MP4 was finalized, so leave it unlinked.
+                output = (
+                    Path(recording["file_path"]).resolve()
+                    if recording.get("file_path")
+                    else None
+                )
+                if not output or not output.is_relative_to(self.recordings_dir):
+                    output = None
                 self._finish(
                     recording["id"],
                     "failed",
                     "Worker restarted; partial output may need manual cleanup",
+                    output,
                 )
 
     def run(self):

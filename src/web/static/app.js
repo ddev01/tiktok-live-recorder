@@ -144,7 +144,7 @@
         });
         if (result?.status === 'offline') {
           currentUsername = result.username || currentUsername;
-          showFeedback(`@${currentUsername} isn’t live right now.`);
+          showFeedback(`@${currentUsername} isn’t live right now, or TikTok couldn’t confirm their stream.`);
           offlineActions.hidden = false;
           return;
         }

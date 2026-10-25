@@ -36,7 +36,7 @@ def test_low_disk_blocks_recording_before_starting_a_child(tmp_path, monkeypatch
 
 
 def test_http_queue_is_started_only_by_worker_service(tmp_path, monkeypatch):
-    worker, store, _ = make_worker(tmp_path)
+    worker, store, recordings_dir = make_worker(tmp_path)
     recording = worker.enqueue("creator", 1800)
     assert recording["status"] == "starting"
     assert recording["pid"] is None
@@ -53,6 +53,7 @@ def test_http_queue_is_started_only_by_worker_service(tmp_path, monkeypatch):
     started = store.recording(recording["id"])
     assert started["status"] == "recording"
     assert started["pid"] == 456
+    assert Path(started["file_path"]).parent == recordings_dir
 
 
 def test_store_deduplicates_jobs_with_partial_active_index(tmp_path):
@@ -97,26 +98,26 @@ def test_low_disk_gracefully_stops_an_active_child(tmp_path):
     assert store.recording(recording_id)["status"] == "stopping"
 
 
-def test_worker_does_not_publish_in_progress_mp4(tmp_path):
+def test_worker_persists_in_progress_mp4_path_for_size_estimates(tmp_path, monkeypatch):
     worker, store, recordings_dir = make_worker(tmp_path)
-    output = recordings_dir / "TK_creator_2026.01.01_00-00-00_web_1.mp4"
-    output.write_bytes(b"growing video")
-    with store.connect() as connection:
-        cursor = connection.execute(
-            "INSERT INTO recordings(username, status, created_at, started_at, "
-            "duration_seconds, pid) VALUES ('creator', 'recording', ?, ?, 1800, 456)",
-            (time.time() - 10, time.time() - 10),
-        )
-        recording_id = cursor.lastrowid
+    recording = worker.enqueue("creator", 1800)
 
     class Child:
+        pid = 456
+
+        def __init__(self, output):
+            self.output = Path(output)
+            self.output.write_bytes(b"growing video")
+
         def poll(self):
             return None
 
-    worker.processes[recording_id] = Child()
     worker.disk_status = lambda: {"low_disk": False}
-    worker._monitor()
-    assert store.recording(recording_id)["file_path"] is None
+    monkeypatch.setattr("web.worker.StreamCapture", lambda _user, path: Child(path))
+    worker.launch_queued(recording["id"])
+    saved = store.recording(recording["id"])
+    assert saved["file_path"] == str(recordings_dir / Path(saved["file_path"]).name)
+    assert Path(saved["file_path"]).stat().st_size == len(b"growing video")
 
 
 def test_interrupted_stream_keeps_finalized_partial_mp4(tmp_path):
@@ -290,11 +291,14 @@ def test_shutdown_signals_active_recorders_for_graceful_finalize(tmp_path, monke
 
 
 def test_recovery_never_signals_pid_from_a_previous_container(tmp_path, monkeypatch):
-    worker, store, _ = make_worker(tmp_path)
+    worker, store, recordings_dir = make_worker(tmp_path)
+    partial = recordings_dir / "partial.mp4"
+    partial.write_bytes(b"partial data")
     with store.connect() as connection:
         connection.execute(
-            "INSERT INTO recordings(username, status, created_at, started_at, pid) "
-            "VALUES ('creator', 'recording', 1, 1, 98765)"
+            "INSERT INTO recordings(username, status, created_at, started_at, pid, file_path) "
+            "VALUES ('creator', 'recording', 1, 1, 98765, ?)",
+            (str(partial),),
         )
     monkeypatch.setattr(
         worker_module.os,
@@ -307,6 +311,7 @@ def test_recovery_never_signals_pid_from_a_previous_container(tmp_path, monkeypa
     recording = store.recordings()[0]
     assert recording["status"] == "failed"
     assert recording["pid"] is None
+    assert recording["file_path"] == str(partial)
     assert "partial output" in recording["error"]
 
 

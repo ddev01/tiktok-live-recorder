@@ -104,7 +104,7 @@ sudo docker run \
 
 ## Web Dashboard
 
-This fork adds a private dashboard for starting and managing recordings. It uses the existing recorder, a local SQLite database, and the browser's built-in video player. Live preview is not included.
+This fork adds a private dashboard for starting and managing recordings. It uses Streamlink for TikTok capture, FFmpeg stream-copy remuxing, a local SQLite database, and the browser's built-in video player. Live preview is not included. A broken active stream is saved as an interrupted partial recording; Streamlink does not safely resume an active FLV stream, so the app does not stitch reopened streams together.
 
 For local development, install the Python web extra and build the dashboard assets:
 

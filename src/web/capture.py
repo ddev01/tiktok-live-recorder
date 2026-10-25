@@ -23,9 +23,13 @@ def is_live(username):
 
     session = Streamlink()
     cookies = cookie_file()
-    if cookies:
-        session.http.set_cookies_from_file(cookies)
-    return bool(session.streams(f"https://www.tiktok.com/@{username}/live"))
+    try:
+        if cookies:
+            session.http.set_cookies_from_file(cookies)
+        streams = session.streams(f"https://www.tiktok.com/@{username}/live")
+        return any(not quality.endswith("_ao") for quality in streams)
+    finally:
+        session.http.close()
 
 
 class StreamCapture:
@@ -35,6 +39,7 @@ class StreamCapture:
         if not HANDLE_RE.fullmatch(username):
             raise ValueError("Invalid TikTok username")
         self.output = Path(output)
+        self._streamlink_signalled = False
         command = [
             sys.executable,
             "-m",
@@ -87,12 +92,16 @@ class StreamCapture:
             self.streamlink.stdout.close()
 
     def send_signal(self, sig):
-        if self.streamlink.poll() is None:
+        if not self._streamlink_signalled and self.streamlink.poll() is None:
             self.streamlink.send_signal(sig)
+            self._streamlink_signalled = True
 
     def poll(self):
         streamlink_status = self.streamlink.poll()
         ffmpeg_status = self.ffmpeg.poll()
+        if ffmpeg_status is not None and streamlink_status is None:
+            self.send_signal(signal.SIGINT)
+            streamlink_status = self.streamlink.poll()
         return (
             ffmpeg_status
             if streamlink_status is not None and ffmpeg_status is not None

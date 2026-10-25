@@ -77,7 +77,11 @@ def test_recording_live_check_uses_streamlink_without_network(tmp_path, monkeypa
 
     class FakeStreamlink:
         def __init__(self):
-            self.http = type("FakeHTTP", (), {"set_cookies_from_file": calls.append})()
+            self.http = type(
+                "FakeHTTP",
+                (),
+                {"set_cookies_from_file": calls.append, "close": lambda self: None},
+            )()
 
         def streams(self, url):
             calls.append(url)

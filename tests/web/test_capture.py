@@ -12,7 +12,9 @@ from web import capture  # noqa: E402
 
 def fake_streamlink(monkeypatch, streams):
     session = SimpleNamespace(
-        http=SimpleNamespace(set_cookies_from_file=lambda path: None),
+        http=SimpleNamespace(
+            set_cookies_from_file=lambda path: None, close=lambda: None
+        ),
         streams=streams,
     )
     monkeypatch.setitem(sys.modules, "streamlink", ModuleType("streamlink"))
@@ -40,6 +42,8 @@ def test_live_check_uses_streamlink_with_configured_cookie_file(tmp_path, monkey
 
 def test_live_check_treats_empty_streams_as_offline_and_propagates_errors(monkeypatch):
     fake_streamlink(monkeypatch, lambda _url: {})
+    assert capture.is_live("creator") is False
+    fake_streamlink(monkeypatch, lambda _url: {"h264_ao": object()})
     assert capture.is_live("creator") is False
 
     def fail(_url):
