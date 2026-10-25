@@ -13,7 +13,7 @@ from web.worker import LOW_DISK_BYTES, disk_status
 
 
 DEFAULT_DURATION = 1800
-ALLOWED_DURATIONS = {900, 1800, 3600, 14400, 28800}
+ALLOWED_DURATIONS = {30, 900, 1800, 3600, 14400, 28800}
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,24}$")
 
 
@@ -26,7 +26,7 @@ def _duration(value, default=None):
         or value not in ALLOWED_DURATIONS
     ):
         raise ValueError(
-            "duration_seconds must be 900, 1800, 3600, 14400, 28800, or null"
+            "duration_seconds must be 30, 900, 1800, 3600, 14400, 28800, or null"
         )
     return value
 

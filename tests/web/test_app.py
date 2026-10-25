@@ -135,6 +135,11 @@ def test_duration_patch_and_watchlist_validation(tmp_path):
     )
     assert response.status_code == 200
     assert response.json["duration_seconds"] is None
+    response = client.patch(
+        f"/api/recordings/{recording_id}", json={"duration_seconds": 30}
+    )
+    assert response.status_code == 200
+    assert response.json["duration_seconds"] == 30
     assert response.json["keep_forever"] is False
     assert (
         client.patch(

@@ -13,11 +13,17 @@ def banner() -> None:
     print(Info.BANNER, flush=True)
 
 
-def read_cookies():
+def cookie_file():
+    """Returns the configured cookie file when it exists."""
+    path = os.environ.get("TIKTOK_SESSION_SS_FILE", "/run/secrets/tiktok_session_ss")
+    return path if os.path.isfile(path) else None
+
+
+def read_cookies(path=None):
     """
     Loads Docker's cookie secret when available, otherwise the CLI config file.
     """
-    secret_path = os.environ.get(
+    secret_path = path or os.environ.get(
         "TIKTOK_SESSION_SS_FILE", "/run/secrets/tiktok_session_ss"
     )
     if os.path.isfile(secret_path):

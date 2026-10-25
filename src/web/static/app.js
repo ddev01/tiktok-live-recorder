@@ -38,7 +38,7 @@
     const hours = Math.floor(value / 3600);
     const minutes = Math.floor((value % 3600) / 60);
     const secs = Math.floor(value % 60);
-    return hours ? `${hours}h ${minutes}m` : `${minutes}m ${secs}s`;
+    return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${secs}s` : `${secs}s`;
   };
   const statusClass = (status) => ({
     active: 'badge-success', recording: 'badge-success', completed: 'badge-neutral',
@@ -131,7 +131,7 @@
       }
     }
 
-    async function startRecording(query) {
+    async function startRecording(query, durationSeconds = 1800) {
       if (!query.trim()) { input.focus(); return; }
       currentUsername = query.trim();
       suggestions.hidden = true;
@@ -140,7 +140,7 @@
       submit.disabled = true;
       try {
         const result = await api('/api/recordings', {
-          method: 'POST', body: JSON.stringify({ query: currentUsername, duration_seconds: 1800 }),
+          method: 'POST', body: JSON.stringify({ query: currentUsername, duration_seconds: durationSeconds }),
         });
         if (result?.status === 'offline') {
           currentUsername = result.username || currentUsername;
@@ -169,6 +169,7 @@
       if (event.key === 'Escape') suggestions.hidden = true;
     });
     form.addEventListener('submit', (event) => { event.preventDefault(); startRecording(normalizedQuery()); });
+    $('[data-test-recording]', form)?.addEventListener('click', () => startRecording(normalizedQuery(), 30));
     document.addEventListener('click', (event) => {
       if (!form.contains(event.target)) suggestions.hidden = true;
     });

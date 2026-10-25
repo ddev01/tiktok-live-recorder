@@ -1,18 +1,50 @@
-import os
+import io
 import re
 import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
+
+from utils.utils import cookie_file
 
 
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,24}$")
-DEFAULT_COOKIE_FILE = "/run/secrets/tiktok_session_ss"
 
 
-def cookie_file():
-    path = os.environ.get("TIKTOK_SESSION_SS_FILE", DEFAULT_COOKIE_FILE)
-    return path if Path(path).is_file() else None
+def relay_flv(source, sink):
+    """Copy complete FLV tags and drop a final tag cut short by stopping Streamlink."""
+    reader = io.BufferedReader(source)
+    try:
+        header = reader.read(9)
+        if len(header) != 9 or header[:3] != b"FLV":
+            return
+        data_offset = int.from_bytes(header[5:9], "big")
+        if data_offset < 9:
+            return
+        padding = reader.read(data_offset - 9 + 4)
+        if len(padding) != data_offset - 9 + 4:
+            return
+        sink.write(header + padding)
+        sink.flush()
+        while True:
+            tag_header = reader.read(11)
+            if len(tag_header) != 11:
+                return
+            size = int.from_bytes(tag_header[1:4], "big")
+            body = reader.read(size + 4)
+            if len(body) != size + 4:
+                return
+            sink.write(tag_header + body)
+            sink.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+    finally:
+        try:
+            sink.close()
+        except OSError:
+            pass
+        reader.close()
 
 
 def is_live(username):
@@ -30,6 +62,57 @@ def is_live(username):
         return any(not quality.endswith("_ao") for quality in streams)
     finally:
         session.http.close()
+
+
+def retag_hevc(path):
+    """QuickTime only plays HEVC tagged hvc1; FFmpeg's pipe muxer writes hev1."""
+    path = Path(path)
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,codec_tag_string",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return
+    if probe.returncode != 0 or probe.stdout.strip() != "hevc,hev1":
+        return
+
+    temp = path.with_name(f"{path.stem}.hvc1.tmp{path.suffix}")
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(path),
+                "-c",
+                "copy",
+                "-tag:v",
+                "hvc1",
+                str(temp),
+            ],
+            capture_output=True,
+        )
+    except OSError:
+        return
+    if result.returncode == 0 and temp.is_file() and temp.stat().st_size > 0:
+        temp.replace(path)
+    else:
+        temp.unlink(missing_ok=True)
 
 
 class StreamCapture:
@@ -65,6 +148,7 @@ class StreamCapture:
             close_fds=True,
         )
         self.pid = self.streamlink.pid
+        self._relay = None
         try:
             self.ffmpeg = subprocess.Popen(
                 [
@@ -78,7 +162,7 @@ class StreamCapture:
                     "copy",
                     str(self.output),
                 ],
-                stdin=self.streamlink.stdout,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 close_fds=True,
@@ -89,7 +173,16 @@ class StreamCapture:
             self.streamlink.wait()
             raise
         else:
-            self.streamlink.stdout.close()
+            sink = getattr(self.ffmpeg, "stdin", None)
+            if sink is None:
+                self.streamlink.stdout.close()
+            else:
+                self._relay = threading.Thread(
+                    target=relay_flv,
+                    args=(self.streamlink.stdout, sink),
+                    daemon=True,
+                )
+                self._relay.start()
 
     def send_signal(self, sig):
         if not self._streamlink_signalled and self.streamlink.poll() is None:
@@ -111,6 +204,10 @@ class StreamCapture:
     def wait(self):
         self.streamlink.wait()
         self.ffmpeg.wait()
+        if self._relay is not None:
+            self._relay.join(timeout=5)
+        if self.ffmpeg.returncode == 0 and self.output.is_file():
+            retag_hevc(self.output)
         if not self.finalized:
             self.output.unlink(missing_ok=True)
         return self.ffmpeg.returncode

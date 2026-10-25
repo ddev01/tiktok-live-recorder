@@ -110,8 +110,8 @@ For local development, install the Python web extra and build the dashboard asse
 
 ```bash
 uv sync --extra web
-bun install --no-env-file --frozen-lockfile
-bun --no-env-file run build
+bun install --frozen-lockfile
+bun run build
 ```
 
 Run the web app and recording worker in separate terminals:
@@ -124,6 +124,25 @@ PYTHONPATH=src uv run python -m web.worker
 The app stores its SQLite state and recordings under `state/` and `output/` by default. Set `TT_CLIPPER_DATABASE` and `RECORDINGS_DIR` to change those paths. To use a TikTok session cookie, set `TIKTOK_SESSION_SS_FILE` to a Netscape-format cookie file; keep that file out of Git and do not share it. Never paste the cookie into the dashboard.
 
 The Docker Swarm deployment is documented in [docs/deploy.md](docs/deploy.md). It uses the existing Traefik IP allowlist and requires the `tiktok_session_ss` Swarm secret to be provisioned separately.
+
+### Browser Session Reuse (Playwright)
+
+`web.session` loads the same Netscape cookie file into Playwright, so a session created by logging in manually in your browser can be reused. It does not perform password login.
+
+```bash
+uv sync --extra web --extra browser
+uv run playwright install chromium
+PYTHONPATH=src TIKTOK_SESSION_SS_FILE=./cookies.txt uv run python -m web.session
+```
+
+The check fails with a re-export prompt if the file is missing, has no TikTok session cookie, or TikTok redirects its auth-only `/messages` check to `/login`. To run the live room test against a room that is currently live:
+
+```bash
+PYTHONPATH=src TIKTOK_SESSION_SS_FILE=./cookies.txt TIKTOK_LIVE_URL=https://www.tiktok.com/@creator/live \
+  uv run pytest tests/web/test_session.py -k live_room
+```
+
+Set `TIKTOK_HEADED=1` to watch the browser.
 
 ## Command-Line Usage
 

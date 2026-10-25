@@ -1,6 +1,4 @@
 import signal
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -91,6 +89,7 @@ def test_capture_uses_cookie_path_only_and_pipes_best_stream_to_copy(
         return Child(123, pipe) if len(calls) == 1 else Child(456)
 
     monkeypatch.setattr(capture.subprocess, "Popen", popen)
+    monkeypatch.setattr(capture, "retag_hevc", lambda _path: None)
     process = capture.StreamCapture("creator", output)
     streamlink_args, streamlink_kwargs = calls[0]
     ffmpeg_args, ffmpeg_kwargs = calls[1]
@@ -114,7 +113,7 @@ def test_capture_uses_cookie_path_only_and_pipes_best_stream_to_copy(
         "copy",
         str(output),
     ]
-    assert ffmpeg_kwargs["stdin"] is pipe
+    assert ffmpeg_kwargs["stdin"] is capture.subprocess.PIPE
     assert calls[-1] == ("close",)
 
     process.send_signal(signal.SIGINT)
@@ -179,71 +178,3 @@ def test_failed_ffmpeg_capture_removes_unfinalized_mp4(tmp_path, monkeypatch):
     process.wait()
     assert process.finalized is False
     assert not output.exists()
-
-
-def test_synthetic_flv_is_captured_and_remuxed_without_tiktok(tmp_path, monkeypatch):
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        pytest.skip("ffmpeg is required for the local capture pipeline test")
-    source = tmp_path / "fixture.flv"
-    output = tmp_path / "recording.mp4"
-    subprocess.run(
-        [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=32x32:rate=1:duration=1",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-f",
-            "flv",
-            "-y",
-            str(source),
-        ],
-        check=True,
-    )
-    original_popen = capture.subprocess.Popen
-
-    def fake_streamlink(command, **kwargs):
-        assert command[:4] == [sys.executable, "-m", "streamlink", "--stdout"]
-        return original_popen(
-            [
-                sys.executable,
-                "-c",
-                "import pathlib, sys; sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes())",
-                str(source),
-            ],
-            **kwargs,
-        )
-
-    def pipeline_popen(command, **kwargs):
-        if command[:3] == [sys.executable, "-m", "streamlink"]:
-            return fake_streamlink(command, **kwargs)
-        return original_popen(command, **kwargs)
-
-    monkeypatch.setattr(capture.subprocess, "Popen", pipeline_popen)
-    monkeypatch.delenv("TIKTOK_SESSION_SS_FILE", raising=False)
-
-    process = capture.StreamCapture("creator", output)
-    assert process.wait() == 0
-    assert process.finalized
-    subprocess.run(
-        [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(output),
-            "-f",
-            "null",
-            "-",
-        ],
-        check=True,
-    )

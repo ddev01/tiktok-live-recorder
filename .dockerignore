@@ -7,6 +7,9 @@
 **/.env
 **/.env.*
 **/cookies.json
+**/cookie.json
+**/cookie.txt
+**/cookies.txt
 **/telegram.json
 **/*.session
 **/*.mp4

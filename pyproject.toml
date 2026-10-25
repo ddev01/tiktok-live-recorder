@@ -29,6 +29,9 @@ web = [
     "gunicorn>=26.2.0",
     "streamlink>=8.6.2",
 ]
+browser = [
+    "playwright>=1.55",
+]
 
 [project.urls]
 Homepage = "https://github.com/Michele0303/tiktok-live-recorder"
