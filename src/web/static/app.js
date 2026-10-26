@@ -52,28 +52,44 @@
     const toggle = $('[data-theme-toggle]');
     if (!toggle) return;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const stored = localStorage.getItem('clipper-theme');
+    const stored = localStorage.getItem('vodder-theme');
     const apply = (theme) => {
       const dark = theme === 'dark';
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-      $('[data-theme-label]', toggle).textContent = dark ? 'Light mode' : 'Dark mode';
-      toggle.setAttribute('aria-label', `Switch to ${dark ? 'light' : 'dark'} theme`);
+      toggle.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
       toggle.setAttribute('aria-pressed', String(dark));
+      $$('[data-theme-icon]', toggle).forEach((icon) => {
+        icon.hidden = icon.dataset.themeIcon !== (dark ? 'dark' : 'light');
+      });
     };
     apply(stored || (media.matches ? 'dark' : 'light'));
     toggle.addEventListener('click', () => {
       const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-      localStorage.setItem('clipper-theme', next);
+      localStorage.setItem('vodder-theme', next);
       apply(next);
     });
     media.addEventListener?.('change', (event) => {
-      if (!localStorage.getItem('clipper-theme')) apply(event.matches ? 'dark' : 'light');
+      if (!localStorage.getItem('vodder-theme')) apply(event.matches ? 'dark' : 'light');
     });
   }
 
   function setupSearch() {
     const form = $('[data-search-form]');
     if (!form) return;
+    const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || '');
+    const modKbd = isMac ? '⌘ K' : 'Ctrl+K';
+    $$('[data-mod-key]').forEach((el) => {
+      el.textContent = modKbd;
+    });
+    window.addEventListener('keydown', (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        const field = $('[data-search-input]');
+        if (!field) return;
+        event.preventDefault();
+        field.focus();
+      }
+      if (event.key === 'Escape') document.activeElement?.blur?.();
+    });
     const input = $('[data-search-input]', form);
     const suggestions = $('[data-suggestions]');
     const feedback = $('[data-home-feedback]');
@@ -92,21 +108,21 @@
     const renderSuggestions = (recent = [], results = []) => {
       const parts = [];
       if (results.length) {
-        parts.push('<p class="suggestion-heading">Accounts</p>');
+        parts.push('<p class="suggestion-heading">matches</p>');
         parts.push(results.map((item) => {
           const username = item.username || '';
           const name = item.display_name || username;
-          const live = item.is_live ? '<span class="badge badge-success">Live now</span>' : '';
+          const live = item.is_live ? '<span class="badge badge-success">live</span>' : '';
           const avatar = item.avatar_url
             ? `<img class="avatar" src="${escapeHTML(item.avatar_url)}" alt="" loading="lazy">`
             : `<span class="avatar avatar-fallback" aria-hidden="true">${escapeHTML((name[0] || '@').toUpperCase())}</span>`;
           return `<button class="suggestion-item" type="button" data-query="${escapeHTML(username)}">${avatar}<span class="suggestion-name"><strong>${escapeHTML(name)}</strong><small>@${escapeHTML(username)}</small></span>${live}<span class="suggestion-arrow" aria-hidden="true">↗</span></button>`;
         }).join(''));
       } else if (normalizedQuery()) {
-        parts.push('<p class="suggestion-empty">No matching accounts. Press enter to try this handle anyway.</p>');
+        parts.push('<p class="suggestion-empty">no matches</p>');
       }
       if (!normalizedQuery() && recent.length) {
-        parts.push('<p class="suggestion-heading">Recent searches</p>');
+        parts.push('<p class="suggestion-heading">recent</p>');
         parts.push(recent.slice(0, 10).map((username) => `<button class="suggestion-item recent-item" type="button" data-query="${escapeHTML(username)}"><span class="recent-clock" aria-hidden="true">↺</span><span class="suggestion-name"><strong>@${escapeHTML(username)}</strong></span><span class="suggestion-arrow" aria-hidden="true">↗</span></button>`).join(''));
       }
       suggestions.innerHTML = parts.join('');
@@ -135,26 +151,29 @@
       if (!query.trim()) { input.focus(); return; }
       currentUsername = query.trim();
       suggestions.hidden = true;
-      showFeedback('Checking live status…');
-      const submit = $('[type="submit"]', form);
-      submit.disabled = true;
+      showFeedback('Checking…');
+      const submit = $('[data-search-submit]', form) || $('[type="submit"]', form);
+      const submitLabel = submit ? $('[data-submit-label]', submit) : null;
+      if (submit) submit.disabled = true;
+      if (submitLabel) submitLabel.textContent = '…';
       try {
         const result = await api('/api/recordings', {
           method: 'POST', body: JSON.stringify({ query: currentUsername, duration_seconds: durationSeconds }),
         });
         if (result?.status === 'offline') {
           currentUsername = result.username || currentUsername;
-          showFeedback(`@${currentUsername} isn’t live right now, or TikTok couldn’t confirm their stream.`);
+          showFeedback(`@${currentUsername} offline`);
           offlineActions.hidden = false;
           return;
         }
         const id = recordId(result?.recording || result) ?? result?.recording_id;
         if (id !== undefined && id !== null) window.location.assign(`/recordings/${encodeURIComponent(id)}`);
-        else showFeedback('Recording started, but its details are not available yet. Open your library to check.', true);
+        else showFeedback('Started (no id)', true);
       } catch (error) {
-        showFeedback(error.message || 'Could not start recording. Please try again.', true);
+        showFeedback(error.message || 'Start failed', true);
       } finally {
-        submit.disabled = false;
+        if (submit) submit.disabled = false;
+        if (submitLabel) submitLabel.textContent = 'Start';
       }
     }
 
@@ -169,7 +188,7 @@
       if (event.key === 'Escape') suggestions.hidden = true;
     });
     form.addEventListener('submit', (event) => { event.preventDefault(); startRecording(normalizedQuery()); });
-    $('[data-test-recording]', form)?.addEventListener('click', () => startRecording(normalizedQuery(), 30));
+    $('[data-test-recording]')?.addEventListener('click', () => startRecording(normalizedQuery(), 30));
     document.addEventListener('click', (event) => {
       if (!form.contains(event.target)) suggestions.hidden = true;
     });
@@ -178,10 +197,10 @@
       button.disabled = true;
       try {
         await api('/api/watchlist', { method: 'POST', body: JSON.stringify({ username: currentUsername.replace(/^@/, ''), mode }) });
-        showFeedback(mode === 'once' ? 'We’ll start recording the next time they go live.' : 'Added to your always-record list.');
+        showFeedback(mode === 'once' ? 'Queued: next live' : 'Watchlist');
         offlineActions.hidden = true;
       } catch (error) {
-        showFeedback(error.message || 'Could not update your watchlist.', true);
+        showFeedback(error.message || 'Watchlist failed', true);
       } finally { button.disabled = false; }
     }));
   }
@@ -201,13 +220,13 @@
       const size = record.file_size_bytes ?? record.size_bytes;
       const pinned = record.keep_forever ?? record.pinned ?? false;
       const playable = ['completed', 'stopped', 'interrupted'].includes(String(status).toLowerCase()) && record.file_name && !record.file_name.endsWith('_flv.mp4');
-      const keepForever = `<label class="keep-toggle"><input type="checkbox" data-keep-record="${escapeHTML(id ?? '')}"${id == null ? ' disabled' : ''}${pinned ? ' checked' : ''} aria-label="Keep ${escapeHTML(username)} forever"><span>Keep forever</span></label>`;
-      const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Details</a>${playable ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${status === 'interrupted' ? 'partial recording of' : ''} ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${status === 'interrupted' ? 'partial recording of' : ''} ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete recording of ${escapeHTML(username)}">×</button></div>`;
+      const keepForever = `<label class="keep-toggle"><input type="checkbox" data-keep-record="${escapeHTML(id ?? '')}"${id == null ? ' disabled' : ''}${pinned ? ' checked' : ''} aria-label="Pin ${escapeHTML(username)}"><span>Pin</span></label>`;
+      const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Open</a>${playable ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete ${escapeHTML(username)}">×</button></div>`;
       if (compact) return `<article class="record-card card"><div class="record-card-top"><strong>@${escapeHTML(username)}</strong><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></div><div class="record-card-meta"><span>${escapeHTML(formatDate(date))}</span><span>${escapeHTML(formatSize(size))}</span></div><div class="record-card-bottom">${keepForever}${actions}</div></article>`;
       return `<tr><td><a class="creator-link" href="/recordings/${encodeURIComponent(id)}">@${escapeHTML(username)}</a></td><td><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></td><td>${escapeHTML(formatDate(date))}</td><td>${escapeHTML(formatSize(size))}</td><td><div class="table-actions">${keepForever}${actions}</div></td></tr>`;
     };
     const attachDelete = (root) => $$('[data-delete-record]', root).forEach((button) => button.addEventListener('click', async () => {
-      if (!window.confirm('Delete this recording? This cannot be undone.')) return;
+      if (!window.confirm('Delete?')) return;
       button.disabled = true;
       try { await api(`/api/recordings/${encodeURIComponent(button.dataset.deleteRecord)}`, { method: 'DELETE' }); loadRecordings(); }
       catch (error) { window.alert(error.message || 'Could not delete recording.'); button.disabled = false; }
@@ -232,7 +251,7 @@
         $('[data-recording-count]').textContent = records.length;
         if (!records.length) {
           showError(body, 'No recordings yet. Start one to see it here.', 5);
-          mobile.innerHTML = '<div class="empty-card card">No recordings yet. Start one to see it here.</div>';
+          mobile.innerHTML = '<div class="empty-card">—</div>';
         } else {
           body.innerHTML = records.map((record) => renderRecord(record)).join('');
           mobile.innerHTML = records.map((record) => renderRecord(record, true)).join('');
@@ -240,8 +259,8 @@
           attachKeepForever(body); attachKeepForever(mobile);
         }
       } catch (error) {
-        showError(body, error.message || 'Could not load recordings.', 5);
-        mobile.innerHTML = `<div class="empty-card card">${escapeHTML(error.message || 'Could not load recordings.')}</div>`;
+        showError(body, error.message || 'Load failed', 5);
+        mobile.innerHTML = `<div class="empty-card">${escapeHTML(error.message || 'Load failed')}</div>`;
       }
     }
     async function loadWatchlist() {
@@ -254,9 +273,9 @@
           const mode = typeof item === 'string' ? 'always' : (item.mode || 'always');
           const maxDuration = Number(item.max_duration_seconds || 14400);
           const durationOptions = [[900, '15m'], [1800, '30m'], [3600, '1h'], [14400, '4h'], [28800, '8h']];
-          const maxControl = mode === 'always' ? `<label class="watch-max">Max / live<select data-watch-max="${escapeHTML(username)}" data-previous="${maxDuration}" aria-label="Maximum recording time for @${escapeHTML(username)}">${durationOptions.map(([seconds, label]) => `<option value="${seconds}"${maxDuration === seconds ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : '';
-          return `<article class="watch-card card"><div class="watch-avatar" aria-hidden="true">${escapeHTML((username || '@')[0].toUpperCase())}</div><div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'Always record' : 'Next live only'}</span></div>${maxControl}<span class="badge badge-outline">${mode === 'always' ? 'ALWAYS' : 'ONCE'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" aria-label="Remove @${escapeHTML(username)} from watchlist">×</button></article>`;
-        }).join('') : '<div class="empty-card card">No creators yet. Add someone when they’re offline.</div>';
+          const maxControl = mode === 'always' ? `<label class="watch-max">max<select data-watch-max="${escapeHTML(username)}" data-previous="${maxDuration}" aria-label="Max duration @${escapeHTML(username)}">${durationOptions.map(([seconds, label]) => `<option value="${seconds}"${maxDuration === seconds ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : '';
+          return `<article class="watch-card"><div class="watch-avatar" aria-hidden="true">${escapeHTML((username || '@')[0].toUpperCase())}</div><div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'watch' : 'once'}</span></div>${maxControl}<span class="badge badge-neutral">${mode === 'always' ? 'watch' : 'once'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" aria-label="Remove @${escapeHTML(username)}">×</button></article>`;
+        }).join('') : '<div class="empty-card">—</div>';
         $$('[data-watch-max]', container).forEach((select) => select.addEventListener('change', async () => {
           const previous = select.dataset.previous || '14400';
           select.disabled = true;
@@ -269,15 +288,15 @@
           } catch (error) {
             select.value = previous;
             select.disabled = false;
-            window.alert(error.message || 'Could not update maximum recording time.');
+            window.alert(error.message || 'Update failed');
           }
         }));
         $$('[data-remove-watch]', container).forEach((button) => button.addEventListener('click', async () => {
           button.disabled = true;
           try { await api(`/api/watchlist?username=${encodeURIComponent(button.dataset.removeWatch)}`, { method: 'DELETE' }); loadWatchlist(); }
-          catch (error) { window.alert(error.message || 'Could not remove creator.'); button.disabled = false; }
+          catch (error) { window.alert(error.message || 'Remove failed'); button.disabled = false; }
         }));
-      } catch (error) { container.innerHTML = `<div class="empty-card card">${escapeHTML(error.message || 'Could not load watchlist.')}</div>`; }
+      } catch (error) { container.innerHTML = `<div class="empty-card">${escapeHTML(error.message || 'Load failed')}</div>`; }
     }
     async function loadSystem() {
       try {
@@ -285,7 +304,7 @@
         const free = Number(system?.free_space_bytes ?? system?.free_bytes ?? system?.disk?.free_bytes);
         const lowStatus = /low|critical|full|warning/i.test(String(system?.status || system?.disk?.status || ''));
         if (lowStatus || (Number.isFinite(free) && free < 5 * 1024 ** 3)) {
-          $('[data-storage-message]').textContent = Number.isFinite(free) ? `${formatSize(free)} free. Delete recordings to make room.` : 'Free up space to keep recording.';
+          $('[data-storage-message]').textContent = Number.isFinite(free) ? `${formatSize(free)} free` : '';
           $('[data-storage-warning]').hidden = false;
         }
       } catch { /* System status is optional if the endpoint is unavailable. */ }
@@ -335,17 +354,17 @@
         play.href = `/recordings/${encodeURIComponent(id)}/video`; download.href = `/recordings/${encodeURIComponent(id)}/download`;
         if (recording.error) showFeedback(recording.error, true);
         if (status === 'interrupted') {
-          play.innerHTML = '▶ <span>Play partial recording</span>';
-          download.innerHTML = '↓ <span>Download partial recording</span>';
-          if (!recording.error) showFeedback('Stream interrupted; a playable partial recording was saved.', true);
+          play.textContent = 'Play';
+          download.textContent = 'Download';
+          if (!recording.error) showFeedback('Interrupted (partial saved)', true);
         }
         play.hidden = !playable; download.hidden = !playable; stop.hidden = !active;
         if (active && !refreshTimer) refreshTimer = setInterval(load, 3000);
         else if (!active && refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
       } catch (error) {
-        $('[data-recording-title]').textContent = 'Recording unavailable';
+        $('[data-recording-title]').textContent = 'Unavailable';
         $('[data-recording-subtitle]').textContent = '';
-        showFeedback(error.message || 'Could not load recording details.', true);
+        showFeedback(error.message || 'Load failed', true);
       }
     }
     $$('[data-duration]').forEach((button) => button.addEventListener('click', async () => {
@@ -353,16 +372,16 @@
       button.disabled = true;
       try {
         await api(`/api/recordings/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ duration_seconds: value }) });
-        showFeedback(value === null ? 'Recording will stop when the stream ends.' : `Recording duration set to ${formatDuration(value)}.`);
+        showFeedback(value === null ? 'Until stream end' : formatDuration(value));
         await load();
-      } catch (error) { showFeedback(error.message || 'Could not update duration.', true); button.disabled = false; }
+      } catch (error) { showFeedback(error.message || 'Update failed', true); button.disabled = false; }
     }));
     $('[data-stop-recording]').addEventListener('click', async (event) => {
       const button = event.currentTarget;
-      if (!window.confirm('Stop this recording now?')) return;
+      if (!window.confirm('Stop?')) return;
       button.disabled = true;
-      try { await api(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: 'POST' }); showFeedback('Recording stopped.'); await load(); }
-      catch (error) { showFeedback(error.message || 'Could not stop recording.', true); button.disabled = false; }
+      try { await api(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: 'POST' }); showFeedback('Stopped'); await load(); }
+      catch (error) { showFeedback(error.message || 'Stop failed', true); button.disabled = false; }
     });
     load();
   }

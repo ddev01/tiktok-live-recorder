@@ -1,33 +1,39 @@
 {% extends "base.html" %}
-{% block title %}Recording details{% endblock %}
+{% block title %}Capture{% endblock %}
 {% block content %}
-<a class="back-link" href="/dashboard">← <span>Back to library</span></a>
-<section class="recording-detail" data-recording-detail data-recording-id="{{ recording_id|default('', true) }}">
-  <div class="detail-topline"><div class="eyebrow">RECORDING</div><span class="badge status-badge" data-recording-status>Loading</span></div>
-  <h1 data-recording-title>Loading recording…</h1>
-  <p class="detail-subtitle" data-recording-subtitle>Getting the latest details</p>
-  <div class="detail-stats card">
-    <div><span class="stat-label">Recorded so far</span><strong data-recording-time>—</strong></div>
-    <div><span class="stat-label">File size</span><strong data-recording-size>—</strong></div>
-    <div><span class="stat-label">Estimated total</span><strong data-recording-estimate>—</strong></div>
-  </div>
-  <div class="alert storage-alert recording-space-warning" role="status" hidden data-recording-space-warning></div>
-  <section class="duration-section" aria-labelledby="duration-heading">
-    <div class="section-heading"><div><h2 id="duration-heading">Recording length</h2><p>Choose when this recording should stop.</p></div></div>
-    <div class="duration-options" role="group" aria-label="Recording duration">
-      <button class="btn btn-duration" type="button" data-duration="30">30 sec (test)</button>
-      <button class="btn btn-duration" type="button" data-duration="900">15 min</button>
-      <button class="btn btn-duration" type="button" data-duration="1800">30 min</button>
-      <button class="btn btn-duration" type="button" data-duration="3600">1 hour</button>
-      <button class="btn btn-duration" type="button" data-duration="14400">4 hours</button>
-      <button class="btn btn-duration" type="button" data-duration="" data-until-end>Until stream ends</button>
+<div class="page-stack recording-page">
+  <a class="back-link" href="/dashboard">← Library</a>
+  <section class="recording-detail" data-recording-detail data-recording-id="{{ recording_id|default('', true) }}">
+    <header class="page-header page-header-row detail-topline">
+      <div class="detail-title-wrap">
+        <h1 data-recording-title>…</h1>
+        <p class="detail-subtitle" data-recording-subtitle></p>
+      </div>
+      <span class="badge status-badge admin-chip" data-recording-status>…</span>
+    </header>
+    <div class="detail-stats admin-section">
+      <div><span class="stat-label">Elapsed</span><strong data-recording-time>—</strong></div>
+      <div><span class="stat-label">Size</span><strong data-recording-size>—</strong></div>
+      <div><span class="stat-label">Est.</span><strong data-recording-estimate>—</strong></div>
+    </div>
+    <div class="storage-alert recording-space-warning" role="status" hidden data-recording-space-warning></div>
+    <section class="duration-section admin-section" aria-labelledby="duration-heading">
+      <h2 id="duration-heading" class="section-title">Stop after</h2>
+      <div class="duration-options" role="group" aria-label="Duration">
+        <button class="btn btn-duration" type="button" data-duration="30">30s</button>
+        <button class="btn btn-duration" type="button" data-duration="900">15m</button>
+        <button class="btn btn-duration" type="button" data-duration="1800">30m</button>
+        <button class="btn btn-duration" type="button" data-duration="3600">1h</button>
+        <button class="btn btn-duration" type="button" data-duration="14400">4h</button>
+        <button class="btn btn-duration" type="button" data-duration="" data-until-end">Stream end</button>
+      </div>
+    </section>
+    <div class="detail-feedback" role="status" aria-live="polite" hidden data-detail-feedback></div>
+    <div class="detail-actions">
+      <a class="btn btn-primary" data-play-link href="#" hidden>Play</a>
+      <a class="btn btn-outline" data-download-link href="#" hidden>Download</a>
+      <button class="btn btn-danger" type="button" data-stop-recording hidden>Stop</button>
     </div>
   </section>
-  <div class="detail-feedback alert" role="status" aria-live="polite" hidden data-detail-feedback></div>
-  <div class="detail-actions">
-    <a class="btn btn-primary" data-play-link href="#" hidden>▶ <span>Play recording</span></a>
-    <a class="btn btn-outline" data-download-link href="#" hidden>↓ <span>Download</span></a>
-    <button class="btn btn-danger" type="button" data-stop-recording hidden>Stop recording</button>
-  </div>
-</section>
+</div>
 {% endblock %}

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Vodder">
+  <defs>
+    <radialGradient id="r" cx="36%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#ff8a8a"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </radialGradient>
+  </defs>
+  <path fill="none" stroke="#7ec8ff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M8 12V8a1.5 1.5 0 0 1 1.5-1.5H12M24 12V8a1.5 1.5 0 0 0-1.5-1.5H20M8 20v4a1.5 1.5 0 0 0 1.5 1.5H12M24 20v4a1.5 1.5 0 0 1-1.5 1.5H20"/>
+  <circle cx="16" cy="16" r="5.25" fill="url(#r)"/>
+</svg>

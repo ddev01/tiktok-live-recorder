@@ -140,6 +140,31 @@ def create_app(test_config=None):
     store = Store(app.config["DATABASE"])
     app.extensions["tt_clipper_store"] = store
 
+    @app.context_processor
+    def nav_page():
+        page_by_endpoint = {
+            "home": "home",
+            "dashboard": "dashboard",
+            "recording_page": "recording",
+        }
+        page = page_by_endpoint.get(request.endpoint or "", "")
+        nav_back_href = {
+            "dashboard": "/",
+            "recording": "/dashboard",
+        }.get(page)
+        dev_reload = bool(app.debug)
+        asset_v = ""
+        if dev_reload:
+            css_path = Path(app.static_folder or "") / "app.css"
+            if css_path.is_file():
+                asset_v = str(int(css_path.stat().st_mtime_ns))
+        return {
+            "page": page,
+            "nav_back_href": nav_back_href,
+            "dev_reload": dev_reload,
+            "asset_v": asset_v,
+        }
+
     @app.get("/")
     def home():
         return render_template("home.html")

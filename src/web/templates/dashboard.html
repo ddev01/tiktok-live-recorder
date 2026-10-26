@@ -1,30 +1,34 @@
 {% extends "base.html" %}
-{% block title %}Your library{% endblock %}
+{% block title %}Library{% endblock %}
 {% block content %}
-<section class="page-heading">
-  <div>
-    <div class="eyebrow">YOUR SPACE</div>
+<div class="page-stack">
+  <header class="page-header page-header-row">
     <h1>Library</h1>
-    <p class="hero-copy">Recordings and creators you’re keeping an eye on.</p>
+    <a class="header-action-btn" href="/">New capture</a>
+  </header>
+  <div class="storage-alert" role="status" hidden data-storage-warning>
+    <span class="alert-symbol" aria-hidden="true">!</span>
+    <div><strong>Low disk</strong><p data-storage-message></p></div>
   </div>
-  <a class="btn btn-primary" href="/">＋ <span>New recording</span></a>
-</section>
-<div class="alert storage-alert" role="status" hidden data-storage-warning>
-  <span class="alert-symbol" aria-hidden="true">!</span>
-  <div><strong>Storage is running low</strong><p data-storage-message>Free up space to keep recording.</p></div>
+  <section class="dashboard-section admin-section" aria-labelledby="recordings-heading">
+    <div class="section-heading">
+      <h2 id="recordings-heading">Recordings</h2>
+      <span class="section-count" data-recording-count>—</span>
+    </div>
+    <div class="table-wrap">
+      <table class="recording-table">
+        <thead><tr><th scope="col">Creator</th><th scope="col">Status</th><th scope="col">Date</th><th scope="col">Size</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody data-recordings-body><tr><td colspan="5" class="empty-state">…</td></tr></tbody>
+      </table>
+      <div class="mobile-recordings" data-recordings-mobile></div>
+    </div>
+  </section>
+  <section class="dashboard-section admin-section" aria-labelledby="watchlist-heading">
+    <div class="section-heading">
+      <h2 id="watchlist-heading">Watchlist</h2>
+      <span class="section-count" data-watchlist-count>—</span>
+    </div>
+    <div class="watchlist-grid" data-watchlist-list><div class="empty-card">…</div></div>
+  </section>
 </div>
-<section class="dashboard-section" aria-labelledby="recordings-heading">
-  <div class="section-heading"><div><h2 id="recordings-heading">Recordings</h2><p>Your active and recent captures</p></div><span class="section-count" data-recording-count>—</span></div>
-  <div class="table-wrap card">
-    <table class="table recording-table">
-      <thead><tr><th scope="col">Creator</th><th scope="col">Status</th><th scope="col">Date</th><th scope="col">Size</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-      <tbody data-recordings-body><tr><td colspan="5" class="empty-state">Loading recordings…</td></tr></tbody>
-    </table>
-    <div class="mobile-recordings" data-recordings-mobile></div>
-  </div>
-</section>
-<section class="dashboard-section watchlist-section" aria-labelledby="watchlist-heading">
-  <div class="section-heading"><div><h2 id="watchlist-heading">Always record</h2><p>Creators to check whenever they go live</p></div><span class="section-count" data-watchlist-count>—</span></div>
-  <div class="watchlist-grid" data-watchlist-list><div class="empty-card card">Loading watchlist…</div></div>
-</section>
 {% endblock %}

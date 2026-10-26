@@ -2,11 +2,13 @@
   "name": "tt-clipper-assets",
   "private": true,
   "scripts": {
-    "build": "tailwindcss -i ./ui/main.css -o ./src/web/static/app.css --minify"
+    "build": "tailwindcss -i ./ui/main.css -o ./src/web/static/app.css --minify",
+    "dev:css": "tailwindcss -i ./ui/main.css -o ./src/web/static/app.css --watch",
+    "dev:server": "PYTHONPATH=src uv run python -m web.dev",
+    "dev": "npm run dev:css & npm run dev:server"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.1.0",
-    "daisyui": "^5.0.0",
     "tailwindcss": "^4.1.0"
   }
 }

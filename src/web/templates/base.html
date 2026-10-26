@@ -4,30 +4,67 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>{% block title %}Clipper{% endblock %} · Clipper</title>
-    <link rel="stylesheet" href="/static/app.css">
-    <script src="/static/app.js" defer></script>
+    <title>{% block title %}Vodder{% endblock %}</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/app.css{% if asset_v %}?v={{ asset_v }}{% endif %}">
+    <script src="/static/app.js{% if asset_v %}?v={{ asset_v }}{% endif %}" defer></script>
   </head>
-  <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <a class="brand" href="/" aria-label="Clipper home">
-          <span class="brand-mark" aria-hidden="true">C</span>
-          <span>clipper<span class="brand-period">.</span></span>
-        </a>
-        <nav class="topbar-nav" aria-label="Main navigation">
-          <a href="/" {% if page == 'home' %}aria-current="page"{% endif %}>Record</a>
-          <a href="/dashboard" {% if page == 'dashboard' %}aria-current="page"{% endif %}>Library</a>
-        </nav>
-        <button class="btn btn-ghost theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">
-          <svg class="theme-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.7"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-          <span data-theme-label>Dark mode</span>
-        </button>
-      </header>
-      <main class="main-content">
+  <body class="admin-shell relative">
+    <div class="site-layout{% if page == 'home' %} min-h-dvh{% endif %}">
+      <a class="skip-link" href="#main">Skip to content</a>
+      <nav class="site-nav" aria-label="Primary">
+        <div class="site-nav-start">
+          {% if page != 'home' and nav_back_href %}
+          <a class="site-nav-back" href="{{ nav_back_href }}" aria-label="Back">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M9 2 4 7l5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </a>
+          {% endif %}
+          <a class="site-brand" href="/">
+            <span class="site-brand-text">Vodder</span>
+          </a>
+        </div>
+        <div class="site-nav-end">
+          {% if page == 'home' %}
+          <nav class="site-nav-links" aria-label="Sections">
+            <a href="/dashboard">Library</a>
+          </nav>
+          {% endif %}
+          <button class="theme-icon-btn" type="button" data-theme-toggle aria-label="Switch to dark theme">
+            <svg class="theme-icon theme-icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" data-theme-icon="light">
+              <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.75"/>
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+            </svg>
+            <svg class="theme-icon theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" data-theme-icon="dark" hidden>
+              <path d="M20 14.5A7.5 7.5 0 0 1 9.5 4 6 6 0 1 0 20 14.5Z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </nav>
+      <main
+        id="main"
+        class="{% if page == 'home' %}flex w-full flex-1 flex-col items-center px-4 pt-[calc((100dvh-3.5rem)*0.22)] pb-10 sm:px-8{% else %}main-content{% endif %}"
+        tabindex="-1"
+      >
         {% block content %}{% endblock %}
       </main>
-      <footer class="footer-note"><span>Made for the moments worth keeping.</span><span>Record responsibly.</span></footer>
     </div>
+    {% if dev_reload %}
+    <script>
+      (function () {
+        var last;
+        setInterval(function () {
+          fetch('/static/app.css', { method: 'HEAD', cache: 'no-store' })
+            .then(function (r) {
+              var lm = r.headers.get('Last-Modified');
+              if (last && lm && lm !== last) location.reload();
+              last = lm;
+            })
+            .catch(function () {});
+        }, 800);
+      })();
+    </script>
+    {% endif %}
   </body>
 </html>

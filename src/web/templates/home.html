@@ -1,37 +1,71 @@
 {% extends "base.html" %}
-{% block title %}Record a live{% endblock %}
+{% block title %}Vodder{% endblock %}
 {% block content %}
-<section class="hero-section" aria-labelledby="hero-title">
-  <div class="eyebrow"><span class="live-dot" aria-hidden="true"></span> YOUR LIVE RECORDING DESK</div>
-  <h1 id="hero-title">Catch the live.<br><span>Keep the moment.</span></h1>
-  <p class="hero-copy">Find a creator and we’ll start recording as soon as they’re live.</p>
-
-  <form class="search-form" data-search-form role="search">
-    <label class="sr-only" for="creator-search">TikTok username or profile URL</label>
-    <div class="search-box">
-      <svg class="search-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-      <span class="search-prefix" aria-hidden="true">@</span>
-      <input id="creator-search" name="query" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Search a username or paste a link" aria-controls="search-suggestions" aria-describedby="search-help" data-search-input>
-      <button class="btn btn-primary search-submit" type="submit"><span>Record</span><span aria-hidden="true">→</span></button>
+<div class="mx-auto w-full max-w-[32.5rem] text-center ">
+  <form class="relative w-full" data-search-form>
+    <label class="sr-only" for="creator-search">Username or URL</label>
+    <div class="relative w-full">
+      <span
+        class="pointer-events-none absolute top-1/2 left-3.5 z-[1] flex -translate-y-1/2 text-[#5c6672] dark:text-[#9c9c9d]"
+        aria-hidden="true"
+      >
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+          <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+          <path d="M9.5 9.5L13 13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <input
+        id="creator-search"
+        class="h-[50px] w-full rounded-[10px] border border-[#d7dee4] bg-[#f0f3f7] pr-[4.5rem] pl-[38px] text-[15px] text-[#0f1011] outline-none transition-[border-color] duration-150 placeholder:text-[#5c6672] focus:border-black/25 focus-visible:ring-2 focus-visible:ring-[#57c1ff]/40 focus-visible:outline-none dark:border-[#242728] dark:bg-[#101111] dark:text-[#f4f4f6] dark:placeholder:text-[#9c9c9d] dark:focus:border-white/22"
+        name="query"
+        type="text"
+        enterkeyhint="go"
+        autocomplete="off"
+        autocapitalize="none"
+        spellcheck="false"
+        placeholder="@user or url"
+        aria-keyshortcuts="Meta+K Control+K"
+        aria-controls="search-suggestions"
+        data-search-input
+      >
+      <div class="absolute top-1/2 right-[7px] z-[1] flex -translate-y-1/2 items-center gap-1.5">
+        <span
+          class="hidden min-[420px]:inline-flex items-center rounded border border-[#c8cfd8] bg-[#e4e8ed] px-[5px] py-[2px] text-[10px] font-medium leading-none text-[#3d4550] dark:border-[#3d4248] dark:bg-[#222427] dark:text-[#e2e4e8]"
+          data-mod-key
+          aria-hidden="true"
+        >⌘ K</span>
+      </div>
+      <div
+        id="search-suggestions"
+        class="suggestions rounded-[10px] shadow-[0_12px_32px_rgb(0_0_0/0.1)] dark:shadow-[0_12px_32px_rgb(0_0_0/0.35)]"
+        role="listbox"
+        aria-label="Matches"
+        hidden
+        data-suggestions
+      ></div>
     </div>
-    <p id="search-help" class="search-help">Press enter to start a 30 minute recording. You can change this later.</p>
-    <button class="search-test" type="button" data-test-recording>Start a 30-second test recording</button>
-  <div id="search-suggestions" class="suggestions card" role="region" aria-label="Search suggestions" hidden data-suggestions></div>
   </form>
-  <div class="feedback alert" role="status" aria-live="polite" hidden data-home-feedback></div>
-  <div class="offline-actions" hidden data-offline-actions>
-    <p>Not live right now. Want us to catch the next one?</p>
-    <div class="button-row">
-      <button class="btn btn-secondary" type="button" data-watch-mode="once">Record next live</button>
-      <button class="btn btn-outline" type="button" data-watch-mode="always">Always record</button>
+  <div
+    class="feedback mt-3 w-full text-left"
+    role="status"
+    aria-live="polite"
+    hidden
+    data-home-feedback
+  ></div>
+  <div class="mt-3 w-full text-left" hidden data-offline-actions>
+    <p class="mb-2 text-[0.8125rem] font-medium text-[#8a949f] dark:text-[#9c9c9d]">Offline</p>
+    <div class="flex flex-wrap gap-2">
+      <button
+        class="min-h-8 rounded-md border border-[#57c1ff] bg-[#57c1ff] px-3 text-xs font-medium text-[#0f1011] disabled:opacity-55"
+        type="button"
+        data-watch-mode="once"
+      >Next live</button>
+      <button
+        class="min-h-8 rounded-md border border-[#d7dee4] bg-transparent px-3 text-xs font-medium text-[#0f1011] dark:border-[#242728] dark:text-[#f4f4f6]"
+        type="button"
+        data-watch-mode="always"
+      >Watch</button>
     </div>
   </div>
-</section>
-<section class="home-footnote" aria-label="How recording works">
-  <div><span class="step-number">01</span><span>Search a creator</span></div>
-  <span class="step-line" aria-hidden="true"></span>
-  <div><span class="step-number">02</span><span>We check if they’re live</span></div>
-  <span class="step-line" aria-hidden="true"></span>
-  <div><span class="step-number">03</span><span>Your recording is ready</span></div>
-</section>
+</div>
 {% endblock %}
