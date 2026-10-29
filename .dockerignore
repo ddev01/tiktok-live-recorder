@@ -4,6 +4,8 @@
 **/node_modules
 **/__pycache__
 **/*.py[cod]
+.env*
+!.env.example
 **/.env
 **/.env.*
 **/cookies.json

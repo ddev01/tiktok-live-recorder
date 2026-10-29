@@ -27,10 +27,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src \
     TIKTOK_SESSION_SS_FILE=/run/secrets/tiktok_session_ss
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
-    rm -rf /var/lib/apt/lists/* && \
-    groupadd --system app && \
+# Debian ffmpeg 7.1 cannot demux TikTok HEVC-in-FLV (codec id 12).
+COPY --from=mwader/static-ffmpeg:8.0@sha256:415a41fa3167b890b9703d20bd0f00bf1e9dab8a4b6c27fef1445b2bf5f1ab4a \
+    /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=mwader/static-ffmpeg:8.0@sha256:415a41fa3167b890b9703d20bd0f00bf1e9dab8a4b6c27fef1445b2bf5f1ab4a \
+    /ffprobe /usr/local/bin/ffprobe
+
+RUN groupadd --system app && \
     useradd --system --gid app --home-dir /app app && \
     mkdir -p /data/recordings && \
     chown -R app:app /data
