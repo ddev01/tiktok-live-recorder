@@ -181,7 +181,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   display: flex; width: 100%; align-items: center; gap: 0.65rem; padding: 0.45rem 0.5rem;
   border: 0; border-radius: 0.375rem; background: transparent; color: var(--admin-ink); text-align: left; cursor: pointer;
 }
-.suggestion-item:hover, .suggestion-item:focus-visible {
+.suggestion-item:hover, .suggestion-item:focus-visible, .suggestion-item.is-active {
   background: color-mix(in srgb, var(--admin-blue) 8%, var(--admin-surface));
 }
 .avatar, .avatar-fallback {
@@ -194,6 +194,8 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .suggestion-name strong { font-size: 0.8125rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggestion-name small { color: var(--admin-mute); font-size: 0.6875rem; }
 .suggestion-empty { margin: 0; padding: 0.75rem 0.5rem; color: var(--admin-mute); font-size: 0.8125rem; }
+.creator-cell { display: inline-flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.creator-cell .avatar, .watch-card .avatar, .detail-title-wrap .avatar { width: 1.75rem; height: 1.75rem; }
 
 .feedback, .detail-feedback {
   margin-top: 0.75rem; padding: 0.65rem 0.75rem; border-radius: 0.5rem; font-size: 0.8125rem;
@@ -291,11 +293,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   display: flex; align-items: center; gap: 0.65rem; padding: 0.65rem;
   border: 1px solid var(--admin-hairline); border-radius: 0.5rem; background: var(--admin-canvas);
 }
-.watch-avatar {
-  width: 2rem; height: 2rem; flex: 0 0 auto; border-radius: 0.375rem;
-  display: grid; place-items: center; font-weight: 600; font-size: 0.75rem;
-  background: color-mix(in srgb, var(--admin-blue) 10%, var(--admin-surface)); color: var(--admin-blue);
-}
+.watch-card .avatar { width: 2rem; height: 2rem; }
 .watch-info { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .watch-info strong { font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .watch-info span { font-size: 0.6875rem; color: var(--admin-mute); }
@@ -310,7 +308,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .recording-page .back-link { margin: 0; font-size: 0.75rem; font-weight: 500; color: var(--admin-mute); }
 .recording-page .back-link:hover { color: var(--admin-blue); }
 .recording-detail { display: flex; flex-direction: column; gap: 0.75rem; max-width: 40rem; }
-.detail-title-wrap { min-width: 0; }
+.detail-title-wrap { min-width: 0; display: flex; align-items: center; gap: 0.65rem; }
 .detail-subtitle { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--admin-mute); font-family: ui-monospace, monospace; }
 .detail-stats { display: grid; grid-template-columns: repeat(3, 1fr); padding: 0; gap: 0; }
 .detail-stats > div { padding: 0.85rem 1rem; display: grid; gap: 0.25rem; }

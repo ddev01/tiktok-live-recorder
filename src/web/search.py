@@ -1,5 +1,77 @@
+import re
+from pathlib import Path
+from urllib.parse import urlparse
+
+import requests
+
 from http_utils.http_client import HttpClient
 from utils.utils import read_cookies
+
+_OG_IMAGE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+    re.I,
+)
+_OG_IMAGE_REV = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:image["\']',
+    re.I,
+)
+_MAX_AVATAR_BYTES = 512_000
+
+
+def _avatar_image_ok(url):
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return False
+    return (
+        host == "tiktok.com"
+        or host.endswith(".tiktok.com")
+        or host == "tiktokcdn.com"
+        or host.endswith(".tiktokcdn.com")
+    )
+
+
+def avatar_file(avatars_dir, username):
+    root = Path(avatars_dir).resolve()
+    path = (root / username).resolve()
+    if not path.is_relative_to(root):
+        return None
+    return path if path.is_file() and path.stat().st_size > 0 else None
+
+
+def cache_profile_avatar(username, avatars_dir, image_url=None):
+    """Download a profile image once. Stale files stay until deleted."""
+    root = Path(avatars_dir).resolve()
+    dest = (root / username).resolve()
+    if not dest.is_relative_to(root):
+        return None
+    if dest.is_file() and dest.stat().st_size > 0:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    client = HttpClient(cookies=read_cookies()).req
+    url = image_url
+    if not url:
+        page = client.get(f"https://www.tiktok.com/@{username}", timeout=10)
+        page.raise_for_status()
+        match = _OG_IMAGE.search(page.text) or _OG_IMAGE_REV.search(page.text)
+        if not match:
+            return None
+        url = match.group(1)
+    if not _avatar_image_ok(url):
+        return None
+    # Cookie-less: session_ss is a name/value dict and would otherwise go to any host.
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+    content_type = (response.headers.get("Content-Type") or "").split(";")[0].strip()
+    body = response.content
+    if (
+        not content_type.startswith("image/")
+        or not body
+        or len(body) > _MAX_AVATAR_BYTES
+    ):
+        return None
+    dest.write_bytes(body)
+    return dest
 
 
 def search_profiles(query):

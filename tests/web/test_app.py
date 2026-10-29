@@ -370,7 +370,7 @@ def test_search_recent_list_returns_ten_usernames(tmp_path, monkeypatch):
     response = app.test_client().get("/api/search?q=creator")
     assert response.status_code == 200
     assert len(response.json["recent"]) == 10
-    assert response.json["recent"][0] == "creator11"
+    assert response.json["recent"][0] == {"username": "creator11", "avatar_url": None}
 
 
 def test_empty_search_returns_recent_without_requesting_tiktok(tmp_path, monkeypatch):
@@ -384,7 +384,10 @@ def test_empty_search_returns_recent_without_requesting_tiktok(tmp_path, monkeyp
     )
     response = app.test_client().get("/api/search")
     assert response.status_code == 200
-    assert response.json == {"recent": ["recent_user"], "results": []}
+    assert response.json == {
+        "recent": [{"username": "recent_user", "avatar_url": None}],
+        "results": [],
+    }
 
 
 def test_app_creation_does_not_initialize_storage_or_start_worker(
@@ -408,7 +411,73 @@ def test_search_errors_are_returned_without_leaking_details(tmp_path, monkeypatc
 
     monkeypatch.setattr(app_module, "search_profiles", fail)
     response = make_app(tmp_path).test_client().get("/api/search?q=creator")
-    assert response.status_code == 502
-    assert response.json == {
-        "error": "TikTok profile search is temporarily unavailable"
-    }
+    assert response.status_code == 200
+    assert "private response details" not in str(response.json)
+    assert response.json["results"] == []
+
+
+def test_unknown_query_uses_profile_search(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "search_profiles",
+        lambda query: [
+            {
+                "username": "new_creator",
+                "display_name": "New",
+                "avatar_url": "https://img.test/a",
+                "is_live": True,
+            }
+        ],
+    )
+    response = make_app(tmp_path).test_client().get("/api/search?q=new_cr")
+    assert response.status_code == 200
+    assert response.json["results"] == [
+        {
+            "username": "new_creator",
+            "display_name": "New",
+            "avatar_url": "https://img.test/a",
+            "is_live": True,
+        }
+    ]
+
+
+def test_search_matches_known_usernames_without_tiktok(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    store.remember_search("n1tr01l", time.time())
+    monkeypatch.setattr(
+        app_module,
+        "search_profiles",
+        lambda query: pytest.fail("known matches must not require TikTok"),
+    )
+    response = app.test_client().get("/api/search?q=n1tr")
+    assert response.status_code == 200
+    assert [item["username"] for item in response.json["results"]] == ["n1tr01l"]
+
+
+def test_search_known_is_prefix_not_contains(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    store.remember_search("bobuser", 1)
+    store.remember_search("xbob", 2)
+    store.remember_search("bobby", 3)
+    monkeypatch.setattr(app_module, "search_profiles", lambda query: [])
+    response = app.test_client().get("/api/search?q=bob")
+    assert [item["username"] for item in response.json["results"]] == [
+        "bobby",
+        "bobuser",
+    ]
+
+
+def test_avatar_endpoint_serves_cached_file_only(tmp_path):
+    app = make_app(tmp_path)
+    avatars = Path(app.config["DATABASE"]).resolve().parent / "avatars"
+    avatars.mkdir()
+    (avatars / "creator").write_bytes(b"\xff\xd8\xff")
+    client = app.test_client()
+    missing = client.get("/api/avatars/missing_user")
+    assert missing.status_code == 404
+    assert client.get("/api/avatars/..").status_code == 404
+    found = client.get("/api/avatars/creator")
+    assert found.status_code == 200
+    assert found.data == b"\xff\xd8\xff"

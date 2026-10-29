@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from web.capture import StreamCapture
+from web.search import avatar_file, cache_profile_avatar
 from web.store import Store
 
 
@@ -28,10 +29,11 @@ def disk_status(recordings_dir):
 class RecordingWorker:
     """Single-process queue worker; only this process starts recorder children."""
 
-    def __init__(self, store, recordings_dir, is_live):
+    def __init__(self, store, recordings_dir, is_live, avatars_dir=None):
         self.store = store
         self.recordings_dir = Path(recordings_dir).resolve()
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
+        self.avatars_dir = Path(avatars_dir).resolve() if avatars_dir else None
         self.is_live = is_live
         self.processes = {}
         self._signalled = set()
@@ -320,6 +322,18 @@ class RecordingWorker:
             with self.store.connect() as connection:
                 connection.execute("DELETE FROM recordings WHERE id = ?", (row["id"],))
 
+    def _cache_one_avatar(self):
+        if not self.avatars_dir:
+            return
+        for username in self.store.known_usernames():
+            if avatar_file(self.avatars_dir, username):
+                continue
+            try:
+                cache_profile_avatar(username, self.avatars_dir)
+            except Exception:
+                pass
+            return
+
     def recover_orphans(self):
         for recording in self._active_recordings():
             if recording["status"] == "starting" and recording.get("worker_pid"):
@@ -353,6 +367,7 @@ class RecordingWorker:
                 self._retention()
                 if time.monotonic() - self._last_watch_check >= 60:
                     self._check_watchlist()
+                    self._cache_one_avatar()
                     self._last_watch_check = time.monotonic()
                 self._stop.wait(1)
         finally:
@@ -404,12 +419,16 @@ def _is_live(username):
 
 
 def main():
-    store = Store(os.environ.get("TT_CLIPPER_DATABASE", "state/tt-clipper.sqlite3"))
+    database = os.environ.get("TT_CLIPPER_DATABASE", "state/tt-clipper.sqlite3")
+    store = Store(database)
     store.initialize()
     recordings_dir = os.environ.get(
         "RECORDINGS_DIR", os.environ.get("OUTPUT_DIR", "output")
     )
-    worker = RecordingWorker(store, recordings_dir, _is_live)
+    avatars_dir = os.environ.get(
+        "TT_CLIPPER_AVATARS", str(Path(database).resolve().parent / "avatars")
+    )
+    worker = RecordingWorker(store, recordings_dir, _is_live, avatars_dir)
 
     def request_shutdown(_signum, _frame):
         worker.request_shutdown()

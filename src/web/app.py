@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -7,7 +8,7 @@ from urllib.parse import urlparse
 from flask import Flask, abort, jsonify, render_template, request, send_file
 
 from web.capture import is_live
-from web.search import search_profiles
+from web.search import avatar_file, cache_profile_avatar, search_profiles
 from web.store import Store
 from web.worker import LOW_DISK_BYTES, disk_status
 
@@ -52,7 +53,7 @@ def _username_from_query(query):
     return query.lower()
 
 
-def _recording_json(recording, recordings_dir):
+def _recording_json(recording, recordings_dir, avatar_url=None):
     result = dict(recording)
     result["keep_forever"] = bool(result["keep_forever"])
     path = Path(result["file_path"]).resolve() if result.get("file_path") else None
@@ -118,6 +119,7 @@ def _recording_json(recording, recordings_dir):
     result.pop("file_path", None)
     result.pop("pid", None)
     result.pop("worker_pid", None)
+    result["avatar_url"] = avatar_url
     return result
 
 
@@ -137,8 +139,34 @@ def create_app(test_config=None):
         app.config.update(test_config)
 
     recordings_dir = Path(app.config["RECORDINGS_DIR"]).resolve()
+    avatars_dir = Path(
+        app.config.get("AVATARS_DIR")
+        or os.environ.get(
+            "TT_CLIPPER_AVATARS",
+            str(Path(app.config["DATABASE"]).resolve().parent / "avatars"),
+        )
+    )
     store = Store(app.config["DATABASE"])
     app.extensions["tt_clipper_store"] = store
+
+    def _avatar_url(username):
+        return f"/api/avatars/{username}" if avatar_file(avatars_dir, username) else None
+
+    def _recording_payload(recording):
+        return _recording_json(
+            recording, recordings_dir, _avatar_url(recording["username"])
+        )
+
+    def _remember(username):
+        store.remember_search(username, time.time())
+        if not app.config.get("TESTING") and not avatar_file(avatars_dir, username):
+            def _cache():
+                try:
+                    cache_profile_avatar(username, avatars_dir)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_cache, daemon=True).start()
 
     @app.context_processor
     def nav_page():
@@ -179,20 +207,58 @@ def create_app(test_config=None):
             abort(404)
         return render_template("recording.html", recording_id=recording_id)
 
+    def _known_result(username):
+        return {
+            "username": username,
+            "display_name": username,
+            "avatar_url": _avatar_url(username),
+            "is_live": None,
+        }
+
     @app.get("/api/search")
     def search():
         query = request.args.get("q", "").strip()
         if len(query) > 100:
             return jsonify(error="q must contain at most 100 characters"), 400
+        recent = [
+            {"username": username, "avatar_url": _avatar_url(username)}
+            for username in store.recent_searches()
+        ]
         if not query:
-            return jsonify(recent=store.recent_searches(), results=[])
-        try:
-            results = search_profiles(query)
-            return jsonify(recent=store.recent_searches(), results=results)
-        except Exception:
-            return jsonify(
-                error="TikTok profile search is temporarily unavailable"
-            ), 502
+            return jsonify(recent=recent, results=[])
+        needle = query.lstrip("@").lower()
+        seen = set()
+        results = []
+        for username in store.search_known(needle):
+            seen.add(username)
+            results.append(_known_result(username))
+        if not results:
+            try:
+                for item in search_profiles(needle):
+                    username = (item.get("username") or "").lower()
+                    if not username or username in seen:
+                        continue
+                    seen.add(username)
+                    results.append(
+                        {
+                            **item,
+                            "username": username,
+                            "avatar_url": _avatar_url(username)
+                            or item.get("avatar_url"),
+                        }
+                    )
+            except Exception:
+                pass
+        return jsonify(recent=recent, results=results)
+
+    @app.get("/api/avatars/<username>")
+    def avatar(username):
+        if not HANDLE_RE.fullmatch(username):
+            abort(404)
+        path = avatar_file(avatars_dir, username.lower())
+        if not path:
+            abort(404)
+        return send_file(path, max_age=86400)
 
     @app.post("/api/recordings")
     def create_recording():
@@ -205,10 +271,10 @@ def create_app(test_config=None):
         except ValueError as error:
             return jsonify(error=str(error)), 400
 
-        store.remember_search(username, time.time())
+        _remember(username)
         active = store.active_recording(username)
         if active:
-            return jsonify(_recording_json(active, recordings_dir)), 200
+            return jsonify(_recording_payload(active)), 200
         if disk_status(recordings_dir)["low_disk"]:
             return jsonify(
                 error="Recording blocked: less than 2 GB of free disk space"
@@ -227,15 +293,13 @@ def create_app(test_config=None):
         except Exception:
             return jsonify(error="Could not queue this recording"), 500
         if not created:
-            return jsonify(_recording_json(recording, recordings_dir)), 200
-        return jsonify(_recording_json(recording, recordings_dir)), 201
+            return jsonify(_recording_payload(recording)), 200
+        return jsonify(_recording_payload(recording)), 201
 
     @app.get("/api/recordings")
     def recordings():
         return jsonify(
-            recordings=[
-                _recording_json(item, recordings_dir) for item in store.recordings()
-            ]
+            recordings=[_recording_payload(item) for item in store.recordings()]
         )
 
     @app.get("/api/recordings/<int:recording_id>")
@@ -243,7 +307,7 @@ def create_app(test_config=None):
         recording = store.recording(recording_id)
         if not recording:
             abort(404)
-        return jsonify(_recording_json(recording, recordings_dir))
+        return jsonify(_recording_payload(recording))
 
     @app.patch("/api/recordings/<int:recording_id>")
     def update_recording(recording_id):
@@ -286,7 +350,7 @@ def create_app(test_config=None):
             connection.execute(
                 f"UPDATE recordings SET {', '.join(updates)} WHERE id = ?", values
             )
-        return jsonify(_recording_json(store.recording(recording_id), recordings_dir))
+        return jsonify(_recording_payload(store.recording(recording_id)))
 
     @app.post("/api/recordings/<int:recording_id>/stop")
     def stop_recording(recording_id):
@@ -302,7 +366,7 @@ def create_app(test_config=None):
                     (recording_id,),
                 )
         recording = store.recording(recording_id)
-        return jsonify(_recording_json(recording, recordings_dir))
+        return jsonify(_recording_payload(recording))
 
     @app.delete("/api/recordings/<int:recording_id>")
     def delete_recording(recording_id):
@@ -325,7 +389,12 @@ def create_app(test_config=None):
     @app.route("/api/watchlist", methods=["GET", "POST", "DELETE"])
     def watchlist():
         if request.method == "GET":
-            return jsonify(watchlist=store.watchlist())
+            return jsonify(
+                watchlist=[
+                    {**item, "avatar_url": _avatar_url(item["username"])}
+                    for item in store.watchlist()
+                ]
+            )
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             return jsonify(error="JSON body must be an object"), 400
@@ -361,7 +430,7 @@ def create_app(test_config=None):
                 raise ValueError("max_duration_seconds cannot be null")
         except ValueError as error:
             return jsonify(error=str(error)), 400
-        store.remember_search(username, time.time())
+        _remember(username)
         with store.transaction() as connection:
             existing = connection.execute(
                 "SELECT * FROM watchlist WHERE username = ?", (username,)

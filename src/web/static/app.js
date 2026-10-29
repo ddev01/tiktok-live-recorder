@@ -28,8 +28,11 @@
     return `${size.toFixed(size >= 100 ? 0 : 1)} ${units[unit]}`;
   };
   const formatDate = (value) => {
-    if (!value) return '—';
-    const date = new Date(value);
+    if (value == null || value === '') return '—';
+    const numeric = Number(value);
+    const date = Number.isFinite(numeric)
+      ? new Date(numeric < 1e12 ? numeric * 1000 : numeric)
+      : new Date(value);
     return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   };
   const formatDuration = (seconds) => {
@@ -47,6 +50,13 @@
   const recordId = (record) => record.id ?? record.recording_id;
   const recordStatus = (record) => record.status || (record.is_active ? 'recording' : 'completed');
   const isActive = (record) => record.is_active === true || ['starting', 'active', 'recording', 'stopping'].includes(String(record.status).toLowerCase());
+  const avatarHTML = (username, avatarUrl) => {
+    const letter = escapeHTML(String(username || '@')[0].toUpperCase());
+    if (avatarUrl) {
+      return `<img class="avatar" src="${escapeHTML(avatarUrl)}" alt="" loading="lazy">`;
+    }
+    return `<span class="avatar avatar-fallback" aria-hidden="true">${letter}</span>`;
+  };
 
   function setupTheme() {
     const toggle = $('[data-theme-toggle]');
@@ -97,6 +107,7 @@
     let timer;
     let request = 0;
     let currentUsername = '';
+    let activeIndex = -1;
 
     const showFeedback = (message, error = false) => {
       feedback.textContent = message;
@@ -105,33 +116,61 @@
       offlineActions.hidden = true;
     };
     const normalizedQuery = () => input.value.trim();
+    const suggestionButtons = () => $$('[data-query]', suggestions);
+    const setExpanded = (open) => {
+      input.setAttribute('aria-expanded', String(open));
+      if (!open) suggestions.hidden = true;
+    };
+    const setActive = (index) => {
+      const buttons = suggestionButtons();
+      buttons.forEach((el, i) => {
+        el.classList.toggle('is-active', i === index);
+        el.setAttribute('aria-selected', String(i === index));
+      });
+      if (index < 0 || index >= buttons.length) {
+        activeIndex = -1;
+        input.removeAttribute('aria-activedescendant');
+        return;
+      }
+      activeIndex = index;
+      const el = buttons[index];
+      input.setAttribute('aria-activedescendant', el.id);
+      el.scrollIntoView({ block: 'nearest' });
+    };
+    const suggestionRow = (item, index) => {
+      const username = typeof item === 'string' ? item : (item.username || '');
+      const name = typeof item === 'string' ? username : (item.display_name || username);
+      const avatarUrl = typeof item === 'string' ? null : item.avatar_url;
+      const live = typeof item !== 'string' && item.is_live
+        ? '<span class="badge badge-success">live</span>'
+        : '';
+      return `<button class="suggestion-item" type="button" role="option" id="search-opt-${index}" aria-selected="false" data-query="${escapeHTML(username)}">${avatarHTML(username, avatarUrl)}<span class="suggestion-name"><strong>@${escapeHTML(username)}</strong>${name && name !== username ? `<small>${escapeHTML(name)}</small>` : ''}</span>${live}</button>`;
+    };
     const renderSuggestions = (recent = [], results = []) => {
       const parts = [];
+      let index = 0;
+      const rows = (items) => items.map((item) => suggestionRow(item, index++)).join('');
       if (results.length) {
         parts.push('<p class="suggestion-heading">matches</p>');
-        parts.push(results.map((item) => {
-          const username = item.username || '';
-          const name = item.display_name || username;
-          const live = item.is_live ? '<span class="badge badge-success">live</span>' : '';
-          const avatar = item.avatar_url
-            ? `<img class="avatar" src="${escapeHTML(item.avatar_url)}" alt="" loading="lazy">`
-            : `<span class="avatar avatar-fallback" aria-hidden="true">${escapeHTML((name[0] || '@').toUpperCase())}</span>`;
-          return `<button class="suggestion-item" type="button" data-query="${escapeHTML(username)}">${avatar}<span class="suggestion-name"><strong>${escapeHTML(name)}</strong><small>@${escapeHTML(username)}</small></span>${live}<span class="suggestion-arrow" aria-hidden="true">↗</span></button>`;
-        }).join(''));
+        parts.push(rows(results));
       } else if (normalizedQuery()) {
         parts.push('<p class="suggestion-empty">no matches</p>');
       }
       if (!normalizedQuery() && recent.length) {
         parts.push('<p class="suggestion-heading">recent</p>');
-        parts.push(recent.slice(0, 10).map((username) => `<button class="suggestion-item recent-item" type="button" data-query="${escapeHTML(username)}"><span class="recent-clock" aria-hidden="true">↺</span><span class="suggestion-name"><strong>@${escapeHTML(username)}</strong></span><span class="suggestion-arrow" aria-hidden="true">↗</span></button>`).join(''));
+        parts.push(rows(recent.slice(0, 10)));
       }
       suggestions.innerHTML = parts.join('');
+      setExpanded(Boolean(parts.length));
       suggestions.hidden = !parts.length;
-      $$('[data-query]', suggestions).forEach((button) => button.addEventListener('click', () => {
-        input.value = button.dataset.query;
-        suggestions.hidden = true;
-        startRecording(input.value);
-      }));
+      suggestionButtons().forEach((button) => {
+        button.addEventListener('click', () => {
+          input.value = button.dataset.query;
+          setExpanded(false);
+          startRecording(button.dataset.query);
+        });
+      });
+      setActive(-1);
     };
 
     async function search(query) {
@@ -143,14 +182,14 @@
         if (id !== request) return;
         renderSuggestions(result?.recent || [], result?.results || []);
       } catch {
-        if (id === request) suggestions.hidden = true;
+        if (id === request) setExpanded(false);
       }
     }
 
     async function startRecording(query, durationSeconds = 1800) {
       if (!query.trim()) { input.focus(); return; }
       currentUsername = query.trim();
-      suggestions.hidden = true;
+      setExpanded(false);
       showFeedback('Checking…');
       const submit = $('[data-search-submit]', form) || $('[type="submit"]', form);
       const submitLabel = submit ? $('[data-submit-label]', submit) : null;
@@ -185,12 +224,37 @@
       timer = setTimeout(() => search(normalizedQuery()), 180);
     });
     input.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') suggestions.hidden = true;
+      const buttons = suggestionButtons();
+      const open = !suggestions.hidden && buttons.length;
+      if (event.key === 'ArrowDown' && open) {
+        event.preventDefault();
+        setActive(activeIndex + 1 >= buttons.length ? 0 : activeIndex + 1);
+      } else if (event.key === 'ArrowUp' && open) {
+        event.preventDefault();
+        setActive(activeIndex <= 0 ? buttons.length - 1 : activeIndex - 1);
+      } else if (event.key === 'Escape') {
+        setExpanded(false);
+        setActive(-1);
+      }
     });
-    form.addEventListener('submit', (event) => { event.preventDefault(); startRecording(normalizedQuery()); });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      clearTimeout(timer);
+      const buttons = suggestionButtons();
+      const highlighted = !suggestions.hidden && activeIndex >= 0 ? buttons[activeIndex] : null;
+      if (highlighted) {
+        startRecording(highlighted.dataset.query);
+        return;
+      }
+      const typed = normalizedQuery();
+      if (typed) startRecording(typed);
+    });
     $('[data-test-recording]')?.addEventListener('click', () => startRecording(normalizedQuery(), 30));
     document.addEventListener('click', (event) => {
-      if (!form.contains(event.target)) suggestions.hidden = true;
+      if (!form.contains(event.target)) {
+        setExpanded(false);
+        setActive(-1);
+      }
     });
     $$('[data-watch-mode]').forEach((button) => button.addEventListener('click', async () => {
       const mode = button.dataset.watchMode;
@@ -222,8 +286,9 @@
       const playable = ['completed', 'stopped', 'interrupted'].includes(String(status).toLowerCase()) && record.file_name && !record.file_name.endsWith('_flv.mp4');
       const keepForever = `<label class="keep-toggle"><input type="checkbox" data-keep-record="${escapeHTML(id ?? '')}"${id == null ? ' disabled' : ''}${pinned ? ' checked' : ''} aria-label="Pin ${escapeHTML(username)}"><span>Pin</span></label>`;
       const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Open</a>${playable ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete ${escapeHTML(username)}">×</button></div>`;
-      if (compact) return `<article class="record-card card"><div class="record-card-top"><strong>@${escapeHTML(username)}</strong><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></div><div class="record-card-meta"><span>${escapeHTML(formatDate(date))}</span><span>${escapeHTML(formatSize(size))}</span></div><div class="record-card-bottom">${keepForever}${actions}</div></article>`;
-      return `<tr><td><a class="creator-link" href="/recordings/${encodeURIComponent(id)}">@${escapeHTML(username)}</a></td><td><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></td><td>${escapeHTML(formatDate(date))}</td><td>${escapeHTML(formatSize(size))}</td><td><div class="table-actions">${keepForever}${actions}</div></td></tr>`;
+      const person = `${avatarHTML(username, record.avatar_url)}<span>@${escapeHTML(username)}</span>`;
+      if (compact) return `<article class="record-card card"><div class="record-card-top"><strong class="creator-cell">${person}</strong><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></div><div class="record-card-meta"><span>${escapeHTML(formatDate(date))}</span><span>${escapeHTML(formatSize(size))}</span></div><div class="record-card-bottom">${keepForever}${actions}</div></article>`;
+      return `<tr><td><a class="creator-link creator-cell" href="/recordings/${encodeURIComponent(id)}">${person}</a></td><td><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></td><td>${escapeHTML(formatDate(date))}</td><td>${escapeHTML(formatSize(size))}</td><td><div class="table-actions">${keepForever}${actions}</div></td></tr>`;
     };
     const attachDelete = (root) => $$('[data-delete-record]', root).forEach((button) => button.addEventListener('click', async () => {
       if (!window.confirm('Delete?')) return;
@@ -274,7 +339,7 @@
           const maxDuration = Number(item.max_duration_seconds || 14400);
           const durationOptions = [[900, '15m'], [1800, '30m'], [3600, '1h'], [14400, '4h'], [28800, '8h']];
           const maxControl = mode === 'always' ? `<label class="watch-max">max<select data-watch-max="${escapeHTML(username)}" data-previous="${maxDuration}" aria-label="Max duration @${escapeHTML(username)}">${durationOptions.map(([seconds, label]) => `<option value="${seconds}"${maxDuration === seconds ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : '';
-          return `<article class="watch-card"><div class="watch-avatar" aria-hidden="true">${escapeHTML((username || '@')[0].toUpperCase())}</div><div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'watch' : 'once'}</span></div>${maxControl}<span class="badge badge-neutral">${mode === 'always' ? 'watch' : 'once'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" aria-label="Remove @${escapeHTML(username)}">×</button></article>`;
+          return `<article class="watch-card">${avatarHTML(username, item.avatar_url)}<div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'watch' : 'once'}</span></div>${maxControl}<span class="badge badge-neutral">${mode === 'always' ? 'watch' : 'once'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" aria-label="Remove @${escapeHTML(username)}">×</button></article>`;
         }).join('') : '<div class="empty-card">—</div>';
         $$('[data-watch-max]', container).forEach((select) => select.addEventListener('change', async () => {
           const previous = select.dataset.previous || '14400';
@@ -332,6 +397,16 @@
         const username = recording.username || recording.display_name || 'Recording';
         const status = recordStatus(recording);
         $('[data-recording-title]').textContent = `@${username}`;
+        const photo = $('[data-recording-avatar]');
+        if (photo) {
+          if (recording.avatar_url) {
+            photo.src = recording.avatar_url;
+            photo.hidden = false;
+          } else {
+            photo.removeAttribute('src');
+            photo.hidden = true;
+          }
+        }
         $('[data-recording-subtitle]').textContent = recording.started_at ? `Started ${formatDate(recording.started_at)}` : formatDate(recording.created_at);
         const badge = $('[data-recording-status]');
         badge.textContent = status;

@@ -150,6 +150,37 @@ class Store:
                 )
             ]
 
+    def known_usernames(self):
+        with self.connect() as connection:
+            return [
+                row[0]
+                for row in connection.execute(
+                    "SELECT username FROM recordings "
+                    "UNION SELECT username FROM watchlist "
+                    "UNION SELECT username FROM recent_searches"
+                )
+            ]
+
+    def search_known(self, query, limit=10):
+        needle = (query or "").strip().lstrip("@").lower()
+        if not needle:
+            return []
+        escaped = (
+            needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT username FROM ("
+                "SELECT username FROM recordings "
+                "UNION SELECT username FROM watchlist "
+                "UNION SELECT username FROM recent_searches"
+                ") WHERE username = ? OR username LIKE ? ESCAPE '\\' "
+                "ORDER BY username = ? DESC, username "
+                "LIMIT ?",
+                (needle, f"{escaped}%", needle, limit),
+            )
+            return [row[0] for row in rows]
+
     def remember_search(self, username, timestamp):
         with self.connect() as connection:
             connection.execute(

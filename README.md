@@ -127,7 +127,7 @@ For local UI work (template/CSS reload):
 bun run dev
 ```
 
-That runs Tailwind in watch mode and Flask on `http://127.0.0.1:8000` with reload for templates and `app.js`. CSS changes rebuild automatically and the page refreshes when `app.css` updates.
+That runs Tailwind in watch mode, Flask on `http://127.0.0.1:8000` (template/`app.js` reload), and the recording worker so queued captures leave `starting`. CSS changes rebuild automatically and the page refreshes when `app.css` updates.
 
 The app stores its SQLite state and recordings under `state/` and `output/` by default. Set `TT_CLIPPER_DATABASE` and `RECORDINGS_DIR` to change those paths. To use a TikTok session cookie, set `TIKTOK_SESSION_SS_FILE` to a Netscape-format cookie file; keep that file out of Git and do not share it. Never paste the cookie into the dashboard.
 

@@ -6,8 +6,11 @@
   <section class="recording-detail" data-recording-detail data-recording-id="{{ recording_id|default('', true) }}">
     <header class="page-header page-header-row detail-topline">
       <div class="detail-title-wrap">
-        <h1 data-recording-title>…</h1>
-        <p class="detail-subtitle" data-recording-subtitle></p>
+        <img class="avatar" alt="" hidden data-recording-avatar>
+        <div>
+          <h1 data-recording-title>…</h1>
+          <p class="detail-subtitle" data-recording-subtitle></p>
+        </div>
       </div>
       <span class="badge status-badge admin-chip" data-recording-status>…</span>
     </header>
