@@ -18,11 +18,20 @@ _OG_IMAGE_REV = re.compile(
 _MAX_AVATAR_BYTES = 512_000
 
 
-def _avatar_image_ok(url):
+def _avatar_image_ok(url, platform="tiktok"):
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or not host:
         return False
+    if platform == "twitch":
+        return (
+            host == "twitch.tv"
+            or host.endswith(".twitch.tv")
+            or host == "jtvnw.net"
+            or host.endswith(".jtvnw.net")
+            or host == "twitchcdn.net"
+            or host.endswith(".twitchcdn.net")
+        )
     return (
         host == "tiktok.com"
         or host.endswith(".tiktok.com")
@@ -31,33 +40,43 @@ def _avatar_image_ok(url):
     )
 
 
-def avatar_file(avatars_dir, username):
+def _avatar_name(username, platform="tiktok"):
+    return username if platform == "tiktok" else f"{platform}_{username}"
+
+
+def avatar_file(avatars_dir, username, platform="tiktok"):
     root = Path(avatars_dir).resolve()
-    path = (root / username).resolve()
+    path = (root / _avatar_name(username, platform)).resolve()
     if not path.is_relative_to(root):
         return None
     return path if path.is_file() and path.stat().st_size > 0 else None
 
 
-def cache_profile_avatar(username, avatars_dir, image_url=None):
+def cache_profile_avatar(username, avatars_dir, image_url=None, platform="tiktok"):
     """Download a profile image once. Stale files stay until deleted."""
     root = Path(avatars_dir).resolve()
-    dest = (root / username).resolve()
+    dest = (root / _avatar_name(username, platform)).resolve()
     if not dest.is_relative_to(root):
         return None
     if dest.is_file() and dest.stat().st_size > 0:
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    client = HttpClient(cookies=read_cookies()).req
+    cookies = read_cookies() if platform == "tiktok" else {}
+    client = HttpClient(cookies=cookies).req
     url = image_url
     if not url:
-        page = client.get(f"https://www.tiktok.com/@{username}", timeout=10)
+        page_url = (
+            f"https://www.twitch.tv/{username}"
+            if platform == "twitch"
+            else f"https://www.tiktok.com/@{username}"
+        )
+        page = client.get(page_url, timeout=10)
         page.raise_for_status()
         match = _OG_IMAGE.search(page.text) or _OG_IMAGE_REV.search(page.text)
         if not match:
             return None
         url = match.group(1)
-    if not _avatar_image_ok(url):
+    if not _avatar_image_ok(url, platform):
         return None
     # Cookie-less: session_ss is a name/value dict and would otherwise go to any host.
     response = requests.get(url, timeout=10)

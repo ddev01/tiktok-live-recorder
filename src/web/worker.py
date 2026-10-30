@@ -43,8 +43,12 @@ class RecordingWorker:
     def disk_status(self):
         return disk_status(self.recordings_dir)
 
-    def enqueue(self, username, duration_seconds=1800, keep_forever=False):
-        return self.store.enqueue_recording(username, duration_seconds, keep_forever)[0]
+    def enqueue(
+        self, username, duration_seconds=1800, keep_forever=False, platform="tiktok"
+    ):
+        return self.store.enqueue_recording(
+            username, duration_seconds, keep_forever, platform
+        )[0]
 
     def launch_queued(self, recording_id):
         with self.store.transaction() as connection:
@@ -60,16 +64,18 @@ class RecordingWorker:
                 (os.getpid(), recording_id),
             )
             username = row["username"]
+            platform = row["platform"] if "platform" in row.keys() else "tiktok"
 
         if self.disk_status()["low_disk"]:
             self._finish(recording_id, "failed", "Recording blocked below 2 GB free")
             return False
 
+        prefix = "TW" if platform == "twitch" else "TK"
         output = self.recordings_dir / (
-            f"TK_{username}_{time.strftime('%Y.%m.%d_%H-%M-%S')}_web_{recording_id}.mp4"
+            f"{prefix}_{username}_{time.strftime('%Y.%m.%d_%H-%M-%S')}_web_{recording_id}.mp4"
         )
         try:
-            process = StreamCapture(username, output)
+            process = StreamCapture(username, output, platform=platform)
         except OSError:
             self._finish(recording_id, "failed", "Could not start recorder process")
             return False
@@ -259,7 +265,11 @@ class RecordingWorker:
                 else watch["max_duration_seconds"]
             )
         try:
-            self.enqueue(watch["username"], duration)
+            self.enqueue(
+                watch["username"],
+                duration,
+                platform=watch.get("platform") or "tiktok",
+            )
         except Exception:
             with self.store.connect() as connection:
                 connection.execute(
@@ -280,12 +290,14 @@ class RecordingWorker:
     def _check_watchlist(self):
         for watch in self.store.watchlist():
             try:
-                live = self.is_live(watch["username"])
+                live = self.is_live(
+                    watch["username"], watch.get("platform") or "tiktok"
+                )
             except Exception:
                 with self.store.connect() as connection:
                     connection.execute(
                         "UPDATE watchlist SET last_error = ? WHERE id = ?",
-                        ("TikTok profile check failed", watch["id"]),
+                        ("Live check failed", watch["id"]),
                     )
                 continue
             if not live:
@@ -325,11 +337,13 @@ class RecordingWorker:
     def _cache_one_avatar(self):
         if not self.avatars_dir:
             return
-        for username in self.store.known_usernames():
-            if avatar_file(self.avatars_dir, username):
+        for username, platform in self.store.known_usernames():
+            if avatar_file(self.avatars_dir, username, platform):
                 continue
             try:
-                cache_profile_avatar(username, self.avatars_dir)
+                cache_profile_avatar(
+                    username, self.avatars_dir, platform=platform
+                )
             except Exception:
                 pass
             return
@@ -412,10 +426,10 @@ class RecordingWorker:
                 self._signalled.add(recording_id)
 
 
-def _is_live(username):
+def _is_live(username, platform="tiktok"):
     from web.capture import is_live
 
-    return is_live(username)
+    return is_live(username, platform)
 
 
 def main():

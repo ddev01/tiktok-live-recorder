@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 
 from flask import Flask, abort, jsonify, render_template, request, send_file
 
-from web.capture import is_live
+from web.capture import HANDLE_RE as TIKTOK_HANDLE_RE
+from web.capture import TWITCH_HANDLE_RE, is_live
 from web.search import avatar_file, cache_profile_avatar, search_profiles
 from web.store import Store
 from web.worker import LOW_DISK_BYTES, disk_status
@@ -15,7 +16,9 @@ from web.worker import LOW_DISK_BYTES, disk_status
 
 DEFAULT_DURATION = 1800
 ALLOWED_DURATIONS = {30, 900, 1800, 3600, 14400, 28800}
-HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,24}$")
+HANDLE_RE = TIKTOK_HANDLE_RE
+TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}
+TWITCH_HOSTS = {"twitch.tv", "www.twitch.tv", "m.twitch.tv"}
 
 
 def _duration(value, default=None):
@@ -32,25 +35,45 @@ def _duration(value, default=None):
     return value
 
 
-def _username_from_query(query):
+def _platform(value):
+    if value in (None, ""):
+        return "tiktok"
+    if value not in ("tiktok", "twitch"):
+        raise ValueError("platform must be tiktok or twitch")
+    return value
+
+
+def _handle_re(platform):
+    return TWITCH_HANDLE_RE if platform == "twitch" else HANDLE_RE
+
+
+def _username_from_query(query, platform="tiktok"):
     query = query.strip()
+    platform = _platform(platform)
     if query.startswith("@"):
         query = query[1:]
     if query.startswith("http://") or query.startswith("https://"):
         parsed = urlparse(query)
-        if parsed.scheme != "https" or parsed.hostname not in (
-            "tiktok.com",
-            "www.tiktok.com",
-            "m.tiktok.com",
-        ):
-            raise ValueError("Enter a TikTok live URL or exact username")
-        match = re.fullmatch(r"/@([A-Za-z0-9._]{1,24})/live/?", parsed.path)
-        if not match:
-            raise ValueError("TikTok URL must be a live URL for one account")
-        query = match.group(1)
-    if not HANDLE_RE.fullmatch(query):
-        raise ValueError("Enter a valid TikTok username or live URL")
-    return query.lower()
+        host = parsed.hostname or ""
+        if parsed.scheme != "https":
+            raise ValueError("Enter a live URL or exact username")
+        if host in TWITCH_HOSTS:
+            platform = "twitch"
+            match = re.fullmatch(r"/([A-Za-z0-9_]{3,25})/?", parsed.path)
+            if not match:
+                raise ValueError("Twitch URL must be a channel URL")
+            query = match.group(1)
+        elif host in TIKTOK_HOSTS:
+            platform = "tiktok"
+            match = re.fullmatch(r"/@([A-Za-z0-9._]{1,24})/live/?", parsed.path)
+            if not match:
+                raise ValueError("TikTok URL must be a live URL for one account")
+            query = match.group(1)
+        else:
+            raise ValueError("Enter a TikTok or Twitch URL, or a username")
+    if not _handle_re(platform).fullmatch(query):
+        raise ValueError("Enter a valid username or live URL")
+    return query.lower(), platform
 
 
 def _recording_json(recording, recordings_dir, avatar_url=None):
@@ -123,8 +146,8 @@ def _recording_json(recording, recordings_dir, avatar_url=None):
     return result
 
 
-def _resolve_live(username):
-    return is_live(username)
+def _resolve_live(username, platform="tiktok"):
+    return is_live(username, platform)
 
 
 def create_app(test_config=None):
@@ -149,20 +172,29 @@ def create_app(test_config=None):
     store = Store(app.config["DATABASE"])
     app.extensions["tt_clipper_store"] = store
 
-    def _avatar_url(username):
-        return f"/api/avatars/{username}" if avatar_file(avatars_dir, username) else None
+    def _avatar_url(username, platform="tiktok"):
+        if avatar_file(avatars_dir, username, platform):
+            return f"/api/avatars/{username}?platform={platform}"
+        return None
 
     def _recording_payload(recording):
+        platform = recording.get("platform") or "tiktok"
         return _recording_json(
-            recording, recordings_dir, _avatar_url(recording["username"])
+            recording,
+            recordings_dir,
+            _avatar_url(recording["username"], platform),
         )
 
-    def _remember(username):
-        store.remember_search(username, time.time())
-        if not app.config.get("TESTING") and not avatar_file(avatars_dir, username):
+    def _remember(username, platform="tiktok"):
+        store.remember_search(username, time.time(), platform)
+        if not app.config.get("TESTING") and not avatar_file(
+            avatars_dir, username, platform
+        ):
             def _cache():
                 try:
-                    cache_profile_avatar(username, avatars_dir)
+                    cache_profile_avatar(
+                        username, avatars_dir, platform=platform
+                    )
                 except Exception:
                     pass
 
@@ -207,55 +239,73 @@ def create_app(test_config=None):
             abort(404)
         return render_template("recording.html", recording_id=recording_id)
 
-    def _known_result(username):
+    def _known_result(username, platform):
         return {
             "username": username,
             "display_name": username,
-            "avatar_url": _avatar_url(username),
+            "platform": platform,
+            "avatar_url": _avatar_url(username, platform),
             "is_live": None,
         }
 
     @app.get("/api/search")
     def search():
         query = request.args.get("q", "").strip()
+        try:
+            platform = _platform(request.args.get("platform"))
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
         if len(query) > 100:
             return jsonify(error="q must contain at most 100 characters"), 400
         recent = [
-            {"username": username, "avatar_url": _avatar_url(username)}
-            for username in store.recent_searches()
+            {
+                "username": item["username"],
+                "platform": item["platform"],
+                "avatar_url": _avatar_url(item["username"], item["platform"]),
+            }
+            for item in store.recent_searches(platform)
         ]
         if not query:
             return jsonify(recent=recent, results=[])
         needle = query.lstrip("@").lower()
         seen = set()
         results = []
-        for username in store.search_known(needle):
+        for username in store.search_known(needle, platform):
             seen.add(username)
-            results.append(_known_result(username))
+            results.append(_known_result(username, platform))
         if not results:
             try:
-                for item in search_profiles(needle):
-                    username = (item.get("username") or "").lower()
-                    if not username or username in seen:
-                        continue
-                    seen.add(username)
-                    results.append(
-                        {
-                            **item,
-                            "username": username,
-                            "avatar_url": _avatar_url(username)
-                            or item.get("avatar_url"),
-                        }
-                    )
+                if platform == "twitch":
+                    if TWITCH_HANDLE_RE.fullmatch(needle):
+                        results.append(_known_result(needle, platform))
+                else:
+                    for item in search_profiles(needle):
+                        username = (item.get("username") or "").lower()
+                        if not username or username in seen:
+                            continue
+                        seen.add(username)
+                        results.append(
+                            {
+                                **item,
+                                "username": username,
+                                "platform": platform,
+                                "avatar_url": _avatar_url(username, platform)
+                                or item.get("avatar_url"),
+                            }
+                        )
             except Exception:
                 pass
         return jsonify(recent=recent, results=results)
 
     @app.get("/api/avatars/<username>")
     def avatar(username):
-        if not HANDLE_RE.fullmatch(username):
+        try:
+            platform = _platform(request.args.get("platform"))
+        except ValueError:
             abort(404)
-        path = avatar_file(avatars_dir, username.lower())
+        if not _handle_re(platform).fullmatch(username):
+            abort(404)
+        path = avatar_file(avatars_dir, username.lower(), platform)
         if not path:
             abort(404)
         return send_file(path, max_age=86400)
@@ -266,13 +316,15 @@ def create_app(test_config=None):
         if not isinstance(body, dict) or not isinstance(body.get("query"), str):
             return jsonify(error="query is required"), 400
         try:
-            username = _username_from_query(body["query"])
+            username, platform = _username_from_query(
+                body["query"], body.get("platform")
+            )
             duration = _duration(body.get("duration_seconds"), DEFAULT_DURATION)
         except ValueError as error:
             return jsonify(error=str(error)), 400
 
-        _remember(username)
-        active = store.active_recording(username)
+        _remember(username, platform)
+        active = store.active_recording(username, platform)
         if active:
             return jsonify(_recording_payload(active)), 200
         if disk_status(recordings_dir)["low_disk"]:
@@ -281,15 +333,17 @@ def create_app(test_config=None):
             ), 507
 
         try:
-            live = _resolve_live(username)
+            live = _resolve_live(username, platform)
         except Exception:
             return jsonify(
-                error="Could not check whether this TikTok account is live"
+                error="Could not check whether this account is live"
             ), 502
         if not live:
-            return jsonify(status="offline", username=username), 200
+            return jsonify(status="offline", username=username, platform=platform), 200
         try:
-            recording, created = store.enqueue_recording(username, duration)
+            recording, created = store.enqueue_recording(
+                username, duration, platform=platform
+            )
         except Exception:
             return jsonify(error="Could not queue this recording"), 500
         if not created:
@@ -391,7 +445,12 @@ def create_app(test_config=None):
         if request.method == "GET":
             return jsonify(
                 watchlist=[
-                    {**item, "avatar_url": _avatar_url(item["username"])}
+                    {
+                        **item,
+                        "avatar_url": _avatar_url(
+                            item["username"], item.get("platform") or "tiktok"
+                        ),
+                    }
                     for item in store.watchlist()
                 ]
             )
@@ -402,9 +461,16 @@ def create_app(test_config=None):
             username = request.args.get("username") or body.get("username")
             if not isinstance(username, str) or not username:
                 return jsonify(error="username is required"), 400
+            try:
+                platform = _platform(
+                    request.args.get("platform") or body.get("platform")
+                )
+            except ValueError as error:
+                return jsonify(error=str(error)), 400
             with store.connect() as connection:
                 cursor = connection.execute(
-                    "DELETE FROM watchlist WHERE username = ?", (username,)
+                    "DELETE FROM watchlist WHERE username = ? AND platform = ?",
+                    (username, platform),
                 )
             return (
                 ("", 204)
@@ -417,7 +483,7 @@ def create_app(test_config=None):
         if not isinstance(username, str):
             return jsonify(error="username is required"), 400
         try:
-            username = _username_from_query(username)
+            username, platform = _username_from_query(username, body.get("platform"))
             if mode not in ("once", "always"):
                 raise ValueError("mode must be once or always")
             duration = (
@@ -430,20 +496,23 @@ def create_app(test_config=None):
                 raise ValueError("max_duration_seconds cannot be null")
         except ValueError as error:
             return jsonify(error=str(error)), 400
-        _remember(username)
+        _remember(username, platform)
         with store.transaction() as connection:
             existing = connection.execute(
-                "SELECT * FROM watchlist WHERE username = ?", (username,)
+                "SELECT * FROM watchlist WHERE username = ? AND platform = ?",
+                (username, platform),
             ).fetchone()
             connection.execute(
-                "INSERT INTO watchlist(username, mode, duration_seconds, max_duration_seconds, created_at) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(username) DO UPDATE SET "
+                "INSERT INTO watchlist(username, platform, mode, duration_seconds, "
+                "max_duration_seconds, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(username, platform) DO UPDATE SET "
                 "mode = excluded.mode, duration_seconds = excluded.duration_seconds, "
                 "max_duration_seconds = excluded.max_duration_seconds, last_error = NULL",
-                (username, mode, duration, maximum, time.time()),
+                (username, platform, mode, duration, maximum, time.time()),
             )
             item = connection.execute(
-                "SELECT * FROM watchlist WHERE username = ?", (username,)
+                "SELECT * FROM watchlist WHERE username = ? AND platform = ?",
+                (username, platform),
             ).fetchone()
         return jsonify(dict(item)), 200 if existing else 201
 

@@ -83,6 +83,34 @@
     });
   }
 
+  function setupPlatform() {
+    const buttons = $$('[data-platform]');
+    if (!buttons.length) return;
+    const apply = (platform) => {
+      const next = platform === 'twitch' ? 'twitch' : 'tiktok';
+      localStorage.setItem('vodder-platform', next);
+      buttons.forEach((button) => {
+        const selected = button.dataset.platform === next;
+        button.setAttribute('aria-pressed', String(selected));
+      });
+      const input = $('[data-search-input]');
+      if (input) {
+        input.placeholder = next === 'twitch' ? '@user or twitch url' : '@user or url';
+      }
+    };
+    apply(localStorage.getItem('vodder-platform') || 'tiktok');
+    buttons.forEach((button) => button.addEventListener('click', () => {
+      apply(button.dataset.platform);
+      $('[data-search-input]')?.dispatchEvent(new Event('input'));
+    }));
+  }
+
+  const currentPlatform = () => (
+    $('[data-platform][aria-pressed="true"]')?.dataset.platform
+    || localStorage.getItem('vodder-platform')
+    || 'tiktok'
+  );
+
   function setupSearch() {
     const form = $('[data-search-form]');
     if (!form) return;
@@ -177,6 +205,7 @@
       const id = ++request;
       const params = new URLSearchParams();
       params.set('q', query);
+      params.set('platform', currentPlatform());
       try {
         const result = await api(`/api/search?${params}`);
         if (id !== request) return;
@@ -197,7 +226,9 @@
       if (submitLabel) submitLabel.textContent = '…';
       try {
         const result = await api('/api/recordings', {
-          method: 'POST', body: JSON.stringify({ query: currentUsername, duration_seconds: durationSeconds }),
+          method: 'POST', body: JSON.stringify({
+            query: currentUsername, duration_seconds: durationSeconds, platform: currentPlatform(),
+          }),
         });
         if (result?.status === 'offline') {
           currentUsername = result.username || currentUsername;
@@ -260,7 +291,7 @@
       const mode = button.dataset.watchMode;
       button.disabled = true;
       try {
-        await api('/api/watchlist', { method: 'POST', body: JSON.stringify({ username: currentUsername.replace(/^@/, ''), mode }) });
+        await api('/api/watchlist', { method: 'POST', body: JSON.stringify({ username: currentUsername.replace(/^@/, ''), mode, platform: currentPlatform() }) });
         showFeedback(mode === 'once' ? 'Queued: next live' : 'Watchlist');
         offlineActions.hidden = true;
       } catch (error) {
@@ -286,7 +317,8 @@
       const playable = ['completed', 'stopped', 'interrupted'].includes(String(status).toLowerCase()) && record.file_name && !record.file_name.endsWith('_flv.mp4');
       const keepForever = `<label class="keep-toggle"><input type="checkbox" data-keep-record="${escapeHTML(id ?? '')}"${id == null ? ' disabled' : ''}${pinned ? ' checked' : ''} aria-label="Pin ${escapeHTML(username)}"><span>Pin</span></label>`;
       const actions = id == null ? '' : `<div class="row-actions"><a class="text-link" href="/recordings/${encodeURIComponent(id)}">Open</a>${playable ? `<a class="icon-link" href="/recordings/${encodeURIComponent(id)}/video" aria-label="Play ${escapeHTML(username)}">▶</a><a class="icon-link" href="/recordings/${encodeURIComponent(id)}/download" aria-label="Download ${escapeHTML(username)}">↓</a>` : ''}<button class="icon-link delete-record" type="button" data-delete-record="${escapeHTML(id)}" aria-label="Delete ${escapeHTML(username)}">×</button></div>`;
-      const person = `${avatarHTML(username, record.avatar_url)}<span>@${escapeHTML(username)}</span>`;
+      const platform = record.platform === 'twitch' ? 'Twitch' : 'TikTok';
+      const person = `${avatarHTML(username, record.avatar_url)}<span>@${escapeHTML(username)}<small> ${escapeHTML(platform)}</small></span>`;
       if (compact) return `<article class="record-card card"><div class="record-card-top"><strong class="creator-cell">${person}</strong><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></div><div class="record-card-meta"><span>${escapeHTML(formatDate(date))}</span><span>${escapeHTML(formatSize(size))}</span></div><div class="record-card-bottom">${keepForever}${actions}</div></article>`;
       return `<tr><td><a class="creator-link creator-cell" href="/recordings/${encodeURIComponent(id)}">${person}</a></td><td><span class="badge ${statusClass(status)}">${escapeHTML(status)}</span></td><td>${escapeHTML(formatDate(date))}</td><td>${escapeHTML(formatSize(size))}</td><td><div class="table-actions">${keepForever}${actions}</div></td></tr>`;
     };
@@ -336,10 +368,11 @@
         container.innerHTML = entries.length ? entries.map((item) => {
           const username = typeof item === 'string' ? item : item.username;
           const mode = typeof item === 'string' ? 'always' : (item.mode || 'always');
+          const platform = item.platform || 'tiktok';
           const maxDuration = Number(item.max_duration_seconds || 14400);
           const durationOptions = [[900, '15m'], [1800, '30m'], [3600, '1h'], [14400, '4h'], [28800, '8h']];
-          const maxControl = mode === 'always' ? `<label class="watch-max">max<select data-watch-max="${escapeHTML(username)}" data-previous="${maxDuration}" aria-label="Max duration @${escapeHTML(username)}">${durationOptions.map(([seconds, label]) => `<option value="${seconds}"${maxDuration === seconds ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : '';
-          return `<article class="watch-card">${avatarHTML(username, item.avatar_url)}<div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'watch' : 'once'}</span></div>${maxControl}<span class="badge badge-neutral">${mode === 'always' ? 'watch' : 'once'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" aria-label="Remove @${escapeHTML(username)}">×</button></article>`;
+          const maxControl = mode === 'always' ? `<label class="watch-max">max<select data-watch-max="${escapeHTML(username)}" data-watch-platform="${escapeHTML(platform)}" data-previous="${maxDuration}" aria-label="Max duration @${escapeHTML(username)}">${durationOptions.map(([seconds, label]) => `<option value="${seconds}"${maxDuration === seconds ? ' selected' : ''}>${label}</option>`).join('')}</select></label>` : '';
+          return `<article class="watch-card">${avatarHTML(username, item.avatar_url)}<div class="watch-info"><strong>@${escapeHTML(username)}</strong><span>${mode === 'always' ? 'watch' : 'once'} · ${platform === 'twitch' ? 'Twitch' : 'TikTok'}</span></div>${maxControl}<span class="badge badge-neutral">${mode === 'always' ? 'watch' : 'once'}</span><button class="icon-link" type="button" data-remove-watch="${escapeHTML(username)}" data-remove-platform="${escapeHTML(platform)}" aria-label="Remove @${escapeHTML(username)}">×</button></article>`;
         }).join('') : '<div class="empty-card">—</div>';
         $$('[data-watch-max]', container).forEach((select) => select.addEventListener('change', async () => {
           const previous = select.dataset.previous || '14400';
@@ -347,7 +380,11 @@
           try {
             await api('/api/watchlist', {
               method: 'POST',
-              body: JSON.stringify({ username: select.dataset.watchMax, mode: 'always', max_duration_seconds: Number(select.value) }),
+              body: JSON.stringify({
+                username: select.dataset.watchMax, mode: 'always',
+                max_duration_seconds: Number(select.value),
+                platform: select.dataset.watchPlatform || 'tiktok',
+              }),
             });
             loadWatchlist();
           } catch (error) {
@@ -358,7 +395,14 @@
         }));
         $$('[data-remove-watch]', container).forEach((button) => button.addEventListener('click', async () => {
           button.disabled = true;
-          try { await api(`/api/watchlist?username=${encodeURIComponent(button.dataset.removeWatch)}`, { method: 'DELETE' }); loadWatchlist(); }
+          try {
+            const params = new URLSearchParams({
+              username: button.dataset.removeWatch,
+              platform: button.dataset.removePlatform || 'tiktok',
+            });
+            await api(`/api/watchlist?${params}`, { method: 'DELETE' });
+            loadWatchlist();
+          }
           catch (error) { window.alert(error.message || 'Remove failed'); button.disabled = false; }
         }));
       } catch (error) { container.innerHTML = `<div class="empty-card">${escapeHTML(error.message || 'Load failed')}</div>`; }
@@ -396,6 +440,7 @@
         recording = recording?.recording || recording;
         const username = recording.username || recording.display_name || 'Recording';
         const status = recordStatus(recording);
+        const platform = recording.platform === 'twitch' ? 'Twitch' : 'TikTok';
         $('[data-recording-title]').textContent = `@${username}`;
         const photo = $('[data-recording-avatar]');
         if (photo) {
@@ -407,7 +452,7 @@
             photo.hidden = true;
           }
         }
-        $('[data-recording-subtitle]').textContent = recording.started_at ? `Started ${formatDate(recording.started_at)}` : formatDate(recording.created_at);
+        $('[data-recording-subtitle]').textContent = `${platform} · ${recording.started_at ? `Started ${formatDate(recording.started_at)}` : formatDate(recording.created_at)}`;
         const badge = $('[data-recording-status]');
         badge.textContent = status;
         badge.className = `badge status-badge ${statusClass(status)}`;
@@ -462,6 +507,7 @@
   }
 
   setupTheme();
+  setupPlatform();
   setupSearch();
   setupDashboard();
   setupRecording();

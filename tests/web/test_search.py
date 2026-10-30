@@ -75,6 +75,34 @@ def test_cache_profile_avatar_writes_image_bytes(tmp_path, monkeypatch):
     assert image_calls == ["https://p16-sign.tiktokcdn.com/pic.jpg"]
 
 
+def test_cache_twitch_avatar_allows_jtvnw(tmp_path, monkeypatch):
+    class FakeClient:
+        def get(self, url, **kwargs):
+            assert url == "https://www.twitch.tv/test_user_01"
+            return SimpleNamespace(
+                raise_for_status=lambda: None,
+                text='<meta property="og:image" content="https://static-cdn.jtvnw.net/pic.jpg">',
+            )
+
+    def fake_get(url, **kwargs):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            headers={"Content-Type": "image/jpeg"},
+            content=b"\xff\xd8\xff",
+        )
+
+    monkeypatch.setattr(search, "read_cookies", lambda: {"session_ss": "secret"})
+    monkeypatch.setattr(
+        search, "HttpClient", lambda **kwargs: SimpleNamespace(req=FakeClient())
+    )
+    monkeypatch.setattr(search.requests, "get", fake_get)
+    dest = search.cache_profile_avatar(
+        "test_user_01", tmp_path / "avatars", platform="twitch"
+    )
+    assert dest.name == "twitch_test_user_01"
+    assert dest.read_bytes() == b"\xff\xd8\xff"
+
+
 def test_cache_profile_avatar_skips_offsite_image(tmp_path, monkeypatch):
     class FakeClient:
         def get(self, url, **kwargs):

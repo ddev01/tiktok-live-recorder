@@ -43,13 +43,19 @@ def test_recording_validates_query_duration_and_url(tmp_path):
 def test_recording_offline_and_live_submission(tmp_path, monkeypatch):
     app = make_app(tmp_path)
     client = app.test_client()
-    monkeypatch.setattr(app_module, "_resolve_live", lambda username: False)
+    monkeypatch.setattr(app_module, "_resolve_live", lambda username, platform="tiktok": False)
     response = client.post("/api/recordings", json={"query": "@creator"})
     assert response.status_code == 200
-    assert response.json == {"status": "offline", "username": "creator"}
-    assert app.extensions["tt_clipper_store"].recent_searches() == ["creator"]
+    assert response.json == {
+        "status": "offline",
+        "username": "creator",
+        "platform": "tiktok",
+    }
+    assert app.extensions["tt_clipper_store"].recent_searches() == [
+        {"username": "creator", "platform": "tiktok"}
+    ]
 
-    monkeypatch.setattr(app_module, "_resolve_live", lambda username: True)
+    monkeypatch.setattr(app_module, "_resolve_live", lambda username, platform="tiktok": True)
     monkeypatch.setattr(
         "web.worker.StreamCapture",
         lambda *args, **kwargs: pytest.fail(
@@ -90,7 +96,11 @@ def test_recording_live_check_uses_streamlink_without_network(tmp_path, monkeypa
     monkeypatch.setattr(streamlink, "Streamlink", FakeStreamlink)
     client = app.test_client()
     response = client.post("/api/recordings", json={"query": "creator"})
-    assert response.json == {"status": "offline", "username": "creator"}
+    assert response.json == {
+        "status": "offline",
+        "username": "creator",
+        "platform": "tiktok",
+    }
 
     state["streams"] = {"best": object()}
     response = client.post("/api/recordings", json={"query": "creator"})
@@ -113,7 +123,7 @@ def test_duplicate_returns_existing_active_recording(tmp_path, monkeypatch):
             "VALUES ('creator', 'recording', 1, 1, 1800)"
         )
     monkeypatch.setattr(
-        app_module, "_resolve_live", lambda username: pytest.fail("must not check live")
+        app_module, "_resolve_live", lambda username, platform="tiktok": pytest.fail("must not check live")
     )
     response = app.test_client().post("/api/recordings", json={"query": "creator"})
     assert response.status_code == 200
@@ -370,7 +380,11 @@ def test_search_recent_list_returns_ten_usernames(tmp_path, monkeypatch):
     response = app.test_client().get("/api/search?q=creator")
     assert response.status_code == 200
     assert len(response.json["recent"]) == 10
-    assert response.json["recent"][0] == {"username": "creator11", "avatar_url": None}
+    assert response.json["recent"][0] == {
+        "username": "creator11",
+        "platform": "tiktok",
+        "avatar_url": None,
+    }
 
 
 def test_empty_search_returns_recent_without_requesting_tiktok(tmp_path, monkeypatch):
@@ -385,7 +399,9 @@ def test_empty_search_returns_recent_without_requesting_tiktok(tmp_path, monkeyp
     response = app.test_client().get("/api/search")
     assert response.status_code == 200
     assert response.json == {
-        "recent": [{"username": "recent_user", "avatar_url": None}],
+        "recent": [
+            {"username": "recent_user", "platform": "tiktok", "avatar_url": None}
+        ],
         "results": [],
     }
 
@@ -435,6 +451,7 @@ def test_unknown_query_uses_profile_search(tmp_path, monkeypatch):
         {
             "username": "new_creator",
             "display_name": "New",
+            "platform": "tiktok",
             "avatar_url": "https://img.test/a",
             "is_live": True,
         }
@@ -481,3 +498,64 @@ def test_avatar_endpoint_serves_cached_file_only(tmp_path):
     found = client.get("/api/avatars/creator")
     assert found.status_code == 200
     assert found.data == b"\xff\xd8\xff"
+
+
+def test_twitch_query_records_without_using_tiktok_search(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    monkeypatch.setattr(
+        app_module,
+        "search_profiles",
+        lambda query: pytest.fail("twitch search must not call TikTok"),
+    )
+    monkeypatch.setattr(
+        app_module, "_resolve_live", lambda username, platform="tiktok": False
+    )
+    search = client.get("/api/search?q=test_user_01&platform=twitch")
+    assert search.status_code == 200
+    assert search.json["results"] == [
+        {
+            "username": "test_user_01",
+            "display_name": "test_user_01",
+            "platform": "twitch",
+            "avatar_url": None,
+            "is_live": None,
+        }
+    ]
+    response = client.post(
+        "/api/recordings",
+        json={"query": "https://www.twitch.tv/test_user_01", "platform": "tiktok"},
+    )
+    assert response.status_code == 200
+    assert response.json == {
+        "status": "offline",
+        "username": "test_user_01",
+        "platform": "twitch",
+    }
+    monkeypatch.setattr(
+        app_module, "_resolve_live", lambda username, platform="tiktok": platform == "twitch"
+    )
+    started = client.post(
+        "/api/recordings", json={"query": "test_user_01", "platform": "twitch"}
+    )
+    assert started.status_code == 201
+    assert started.json["username"] == "test_user_01"
+    assert started.json["platform"] == "twitch"
+    assert started.json["status"] == "starting"
+
+
+def test_same_handle_can_record_on_both_platforms(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    monkeypatch.setattr(
+        app_module, "_resolve_live", lambda username, platform="tiktok": True
+    )
+    client = app.test_client()
+    tiktok = client.post("/api/recordings", json={"query": "creator"})
+    twitch = client.post(
+        "/api/recordings", json={"query": "creator", "platform": "twitch"}
+    )
+    assert tiktok.status_code == 201
+    assert twitch.status_code == 201
+    assert tiktok.json["id"] != twitch.json["id"]
+    assert tiktok.json["platform"] == "tiktok"
+    assert twitch.json["platform"] == "twitch"

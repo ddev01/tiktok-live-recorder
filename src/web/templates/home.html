@@ -2,6 +2,20 @@
 {% block title %}Vodder{% endblock %}
 {% block content %}
 <div class="mx-auto w-full max-w-[32.5rem] text-center ">
+  <div class="mb-3 inline-flex rounded-[10px] border border-[#d7dee4] p-0.5 dark:border-[#242728]" role="group" aria-label="Platform">
+    <button
+      class="min-h-8 rounded-md px-3 text-xs font-medium text-[#0f1011] aria-pressed:bg-[#57c1ff] dark:text-[#f4f4f6]"
+      type="button"
+      data-platform="tiktok"
+      aria-pressed="true"
+    >TikTok</button>
+    <button
+      class="min-h-8 rounded-md px-3 text-xs font-medium text-[#0f1011] aria-pressed:bg-[#57c1ff] dark:text-[#f4f4f6]"
+      type="button"
+      data-platform="twitch"
+      aria-pressed="false"
+    >Twitch</button>
+  </div>
   <form class="relative w-full" data-search-form>
     <label class="sr-only" for="creator-search">Username or URL</label>
     <div class="relative w-full">

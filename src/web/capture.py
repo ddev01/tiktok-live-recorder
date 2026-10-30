@@ -10,6 +10,37 @@ from utils.utils import cookie_file
 
 
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,24}$")
+TWITCH_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{3,25}$")
+PLATFORMS = ("tiktok", "twitch")
+
+
+def stream_url(username, platform="tiktok"):
+    if platform == "twitch":
+        if not TWITCH_HANDLE_RE.fullmatch(username):
+            raise ValueError("Invalid Twitch username")
+        return f"https://www.twitch.tv/{username}"
+    if not HANDLE_RE.fullmatch(username):
+        raise ValueError("Invalid TikTok username")
+    return f"https://www.tiktok.com/@{username}/live"
+
+
+def relay_bytes(source, sink):
+    reader = io.BufferedReader(source)
+    try:
+        while True:
+            chunk = reader.read(64 * 1024)
+            if not chunk:
+                return
+            sink.write(chunk)
+            sink.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+    finally:
+        try:
+            sink.close()
+        except OSError:
+            pass
+        reader.close()
 
 
 def relay_flv(source, sink):
@@ -47,19 +78,21 @@ def relay_flv(source, sink):
         reader.close()
 
 
-def is_live(username):
-    if not HANDLE_RE.fullmatch(username):
-        raise ValueError("Invalid TikTok username")
+def is_live(username, platform="tiktok"):
+    url = stream_url(username, platform)
 
     from streamlink import Streamlink
 
     session = Streamlink()
-    cookies = cookie_file()
+    cookies = cookie_file() if platform == "tiktok" else None
     try:
         if cookies:
             session.http.set_cookies_from_file(cookies)
-        streams = session.streams(f"https://www.tiktok.com/@{username}/live")
-        return any(not quality.endswith("_ao") for quality in streams)
+        streams = session.streams(url)
+        return any(
+            quality != "audio_only" and not quality.endswith("_ao")
+            for quality in streams
+        )
     finally:
         session.http.close()
 
@@ -118,9 +151,8 @@ def retag_hevc(path):
 class StreamCapture:
     """Pipe Streamlink's origin stream directly into FFmpeg without re-encoding."""
 
-    def __init__(self, username, output):
-        if not HANDLE_RE.fullmatch(username):
-            raise ValueError("Invalid TikTok username")
+    def __init__(self, username, output, platform="tiktok"):
+        url = stream_url(username, platform)
         self.output = Path(output)
         self._streamlink_signalled = False
         command = [
@@ -135,10 +167,12 @@ class StreamCapture:
             "--loglevel",
             "warning",
         ]
-        cookies = cookie_file()
+        cookies = cookie_file() if platform == "tiktok" else None
         if cookies:
             command.extend(("--http-cookies-file", cookies))
-        command.extend((f"https://www.tiktok.com/@{username}/live", "best"))
+        command.extend((url, "best"))
+        ffmpeg_format = "mpegts" if platform == "twitch" else "flv"
+        relay = relay_bytes if platform == "twitch" else relay_flv
 
         self.streamlink = subprocess.Popen(
             command,
@@ -155,7 +189,7 @@ class StreamCapture:
                     "ffmpeg",
                     "-n",
                     "-f",
-                    "flv",
+                    ffmpeg_format,
                     "-i",
                     "pipe:0",
                     "-c",
@@ -178,7 +212,7 @@ class StreamCapture:
                 self.streamlink.stdout.close()
             else:
                 self._relay = threading.Thread(
-                    target=relay_flv,
+                    target=relay,
                     args=(self.streamlink.stdout, sink),
                     daemon=True,
                 )

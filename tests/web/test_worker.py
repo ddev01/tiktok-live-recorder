@@ -54,6 +54,33 @@ def test_http_queue_is_started_only_by_worker_service(tmp_path, monkeypatch):
     assert started["status"] == "recording"
     assert started["pid"] == 456
     assert Path(started["file_path"]).parent == recordings_dir
+    assert Path(started["file_path"]).name.startswith("TK_creator_")
+
+
+def test_twitch_capture_uses_platform_and_tw_prefix(tmp_path, monkeypatch):
+    worker, store, recordings_dir = make_worker(tmp_path)
+    recording = worker.enqueue("test_user_01", 1800, platform="twitch")
+    captured = {}
+
+    class Child:
+        pid = 456
+
+        def poll(self):
+            return None
+
+    def fake_capture(username, output, platform="tiktok"):
+        captured.update(username=username, platform=platform, output=Path(output))
+        return Child()
+
+    monkeypatch.setattr(worker, "disk_status", lambda: {"low_disk": False})
+    monkeypatch.setattr("web.worker.StreamCapture", fake_capture)
+    worker.launch_queued(recording["id"])
+    assert captured == {
+        "username": "test_user_01",
+        "platform": "twitch",
+        "output": recordings_dir / Path(store.recording(recording["id"])["file_path"]).name,
+    }
+    assert captured["output"].name.startswith("TW_test_user_01_")
 
 
 def test_store_deduplicates_jobs_with_partial_active_index(tmp_path):
@@ -113,7 +140,10 @@ def test_worker_persists_in_progress_mp4_path_for_size_estimates(tmp_path, monke
             return None
 
     worker.disk_status = lambda: {"low_disk": False}
-    monkeypatch.setattr("web.worker.StreamCapture", lambda _user, path: Child(path))
+    monkeypatch.setattr(
+        "web.worker.StreamCapture",
+        lambda _user, path, platform="tiktok": Child(path),
+    )
     worker.launch_queued(recording["id"])
     saved = store.recording(recording["id"])
     assert saved["file_path"] == str(recordings_dir / Path(saved["file_path"]).name)
@@ -240,7 +270,9 @@ def test_retention_deletes_old_unpinned_video_but_keeps_keep_forever(tmp_path):
 
 def test_watchlist_once_consumes_and_always_uses_max_duration(tmp_path):
     live = {"once-user": False, "always-user": False}
-    worker, store, _ = make_worker(tmp_path, is_live=lambda username: live[username])
+    worker, store, _ = make_worker(
+        tmp_path, is_live=lambda username, platform="tiktok": live[username]
+    )
     with store.connect() as connection:
         connection.execute(
             "INSERT INTO watchlist(username, mode, duration_seconds, max_duration_seconds, created_at) "
@@ -251,14 +283,18 @@ def test_watchlist_once_consumes_and_always_uses_max_duration(tmp_path):
             "VALUES ('always-user', 'always', 14400, 3600, 1)"
         )
     launched = []
-    worker.enqueue = lambda username, duration: (
-        launched.append((username, duration)) or ({}, True)
+    worker.enqueue = lambda username, duration, **kwargs: (
+        launched.append((username, duration, kwargs.get("platform", "tiktok")))
+        or ({}, True)
     )
     worker._check_watchlist()
     assert launched == []
     live.update({"once-user": True, "always-user": True})
     worker._check_watchlist()
-    assert launched == [("once-user", 1800), ("always-user", 3600)]
+    assert launched == [
+        ("once-user", 1800, "tiktok"),
+        ("always-user", 3600, "tiktok"),
+    ]
     assert [item["username"] for item in store.watchlist()] == ["always-user"]
     worker._check_watchlist()
     assert len(launched) == 2

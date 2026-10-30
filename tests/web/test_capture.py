@@ -36,7 +36,11 @@ def test_live_check_uses_streamlink_with_configured_cookie_file(tmp_path, monkey
     session.http.set_cookies_from_file = cookie_calls.append
 
     assert capture.is_live("creator") is True
-    assert calls == ["https://www.tiktok.com/@creator/live"]
+    assert capture.is_live("test_user_01", "twitch") is True
+    assert calls == [
+        "https://www.tiktok.com/@creator/live",
+        "https://www.twitch.tv/test_user_01",
+    ]
     assert cookie_calls == [str(cookie_file)]
 
 
@@ -121,6 +125,44 @@ def test_capture_uses_cookie_path_only_and_pipes_best_stream_to_copy(
     process.wait()
     assert process.finalized is True
     assert process.interrupted is False
+
+
+def test_twitch_capture_uses_mpegts_without_tiktok_cookies(tmp_path, monkeypatch):
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("test-only-cookie-value", encoding="utf-8")
+    monkeypatch.setenv("TIKTOK_SESSION_SS_FILE", str(cookie_file))
+    output = tmp_path / "capture.mp4"
+    calls = []
+
+    class Child:
+        def __init__(self, pid, stdout=None):
+            self.pid = pid
+            self.stdout = stdout
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, value):
+            pass
+
+        def wait(self):
+            if self.pid == 456:
+                output.write_bytes(b"finalized mp4")
+            return self.returncode
+
+    pipe = SimpleNamespace(close=lambda: None)
+
+    def popen(command, **kwargs):
+        calls.append(command)
+        return Child(123, pipe) if len(calls) == 1 else Child(456)
+
+    monkeypatch.setattr(capture.subprocess, "Popen", popen)
+    monkeypatch.setattr(capture, "retag_hevc", lambda _path: None)
+    capture.StreamCapture("test_user_01", output, platform="twitch")
+    assert calls[0][-2:] == ["https://www.twitch.tv/test_user_01", "best"]
+    assert "--http-cookies-file" not in calls[0]
+    assert calls[1][calls[1].index("-f") + 1] == "mpegts"
 
 
 def test_capture_stops_streamlink_if_ffmpeg_cannot_start(tmp_path, monkeypatch):
