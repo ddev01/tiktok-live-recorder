@@ -3,6 +3,7 @@ import shutil
 import signal
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 from web.capture import StreamCapture
@@ -12,6 +13,21 @@ from web.store import Store
 
 LOW_DISK_BYTES = 2 * 1024**3
 RETENTION_SECONDS = 7 * 24 * 60 * 60
+HEALTHCHECK_TIMEOUT = 5
+
+
+def healthcheck_ping(path=""):
+    """Best-effort dead-man's-switch ping; a configured URL never affects the worker."""
+    base = os.environ.get("HEALTHCHECK_URL", "").strip()
+    if not base:
+        return
+    try:
+        response = urllib.request.urlopen(
+            base.rstrip("/") + path, timeout=HEALTHCHECK_TIMEOUT
+        )
+        response.close()
+    except Exception:
+        pass
 
 
 def disk_status(recordings_dir):
@@ -380,9 +396,15 @@ class RecordingWorker:
                 self._monitor()
                 self._retention()
                 if time.monotonic() - self._last_watch_check >= 60:
-                    self._check_watchlist()
-                    self._cache_one_avatar()
+                    try:
+                        self._check_watchlist()
+                        self._cache_one_avatar()
+                    except Exception:
+                        healthcheck_ping("/fail")
+                        raise
                     self._last_watch_check = time.monotonic()
+                    # The watchlist poll is the periodic job; silence means watches stop being checked.
+                    healthcheck_ping()
                 self._stop.wait(1)
         finally:
             self.shutdown()

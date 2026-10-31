@@ -34,6 +34,8 @@ Run from this app checkout. On first use the script clones the public `ddev01/ti
 
 The script connects using `ssh server`, fast-forwards only the app checkout at `~/tt-clipper` by default, builds `Dockerfile.web` on the VPS, validates the stack, deploys only the `tt-clipper` stack, and prints its service status. Configure `REMOTE_PATH`, `STACK_NAME`, or `TRAEFIK_CERTRESOLVER` in the environment to override those defaults. It does not copy `.env` files or secrets, run broad prune commands, or restart unrelated services.
 
+To alert on a stalled worker, export `HEALTHCHECK_URL` (the healthchecks.io ping URL) before running the script; it is passed to the worker service only. Unset, the stack sets it to empty and monitoring stays off.
+
 To validate the current VPS checkout without pulling, building, or deploying:
 
 ```sh

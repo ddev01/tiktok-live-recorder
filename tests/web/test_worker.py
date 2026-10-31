@@ -351,6 +351,52 @@ def test_recovery_never_signals_pid_from_a_previous_container(tmp_path, monkeypa
     assert "partial output" in recording["error"]
 
 
+def test_healthcheck_ping_is_optional_and_supports_fail_path(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_urlopen(url, timeout):
+        calls.append((url, timeout))
+        return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(worker_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.delenv("HEALTHCHECK_URL", raising=False)
+    worker_module.healthcheck_ping()
+    assert calls == []
+
+    monkeypatch.setenv("HEALTHCHECK_URL", "https://hc-ping.com/example/")
+    worker_module.healthcheck_ping()
+    worker_module.healthcheck_ping("/fail")
+    assert calls == [
+        ("https://hc-ping.com/example", worker_module.HEALTHCHECK_TIMEOUT),
+        ("https://hc-ping.com/example/fail", worker_module.HEALTHCHECK_TIMEOUT),
+    ]
+
+    def broken_urlopen(url, timeout):
+        raise OSError("unreachable")
+
+    monkeypatch.setattr(worker_module.urllib.request, "urlopen", broken_urlopen)
+    worker_module.healthcheck_ping()  # must never raise
+
+
+def test_watchlist_cycle_pings_healthcheck_and_reports_failure(tmp_path, monkeypatch):
+    worker, _, _ = make_worker(tmp_path)
+    pings = []
+    monkeypatch.setattr(
+        worker_module, "healthcheck_ping", lambda path="": pings.append(path)
+    )
+    monkeypatch.setattr(worker._stop, "wait", lambda _seconds: worker._stop.set())
+    worker.run()
+    assert pings == [""]
+
+    pings.clear()
+    worker._stop.clear()
+    worker._last_watch_check = 0
+    worker._check_watchlist = lambda: (_ for _ in ()).throw(RuntimeError("db gone"))
+    with pytest.raises(RuntimeError):
+        worker.run()
+    assert pings == ["/fail"]
+
+
 def test_retention_keeps_metadata_when_video_cannot_be_removed(tmp_path, monkeypatch):
     worker, store, recordings_dir = make_worker(tmp_path)
     old_time = time.time() - RETENTION_SECONDS - 10

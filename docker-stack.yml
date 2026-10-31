@@ -40,6 +40,7 @@ services:
       TT_CLIPPER_DATABASE: /data/tt-clipper.sqlite3
       RECORDINGS_DIR: /data/recordings
       TIKTOK_SESSION_SS_FILE: /run/secrets/tiktok_session_ss
+      HEALTHCHECK_URL: ${HEALTHCHECK_URL:-}
     volumes:
       - recorder-data:/data
     secrets:

@@ -131,6 +131,8 @@ That runs Tailwind in watch mode, Flask on `http://127.0.0.1:8000` (template/`ap
 
 The app stores its SQLite state and recordings under `state/` and `output/` by default. Set `TT_CLIPPER_DATABASE` and `RECORDINGS_DIR` to change those paths. To use a TikTok session cookie, set `TIKTOK_SESSION_SS_FILE` to a Netscape-format cookie file; keep that file out of Git and do not share it. Never paste the cookie into the dashboard.
 
+Set `HEALTHCHECK_URL` to a healthchecks.io ping URL (the base URL, without a trailing `/fail`) to have the worker ping it after each successful 60-second watchlist poll, and ping `/fail` if that poll raises. Leave it unset to disable; behavior is otherwise unchanged.
+
 The Docker Swarm deployment is documented in [docs/deploy.md](docs/deploy.md). It uses the existing Traefik IP allowlist and requires the `tiktok_session_ss` Swarm secret to be provisioned separately.
 
 ### Browser Session Reuse (Playwright)
