@@ -135,6 +135,64 @@ Set `HEALTHCHECK_URL` to a healthchecks.io ping URL (the base URL, without a tra
 
 The Docker Swarm deployment is documented in [docs/deploy.md](docs/deploy.md). It uses the existing Traefik IP allowlist and requires the `tiktok_session_ss` Swarm secret to be provisioned separately.
 
+### Game webhook
+
+`POST /api/game/players` starts recordings for Twitch and TikTok accounts collected from a game. It is disabled unless both `TT_GAME_WEBHOOK_SECRET` and `TT_GAME_WEBHOOK_TOKEN` are set (each also supports a `_FILE` variant pointing at a secret file). Requests require three headers:
+
+- `X-TT-Token`: the static API token.
+- `X-TT-Timestamp`: current Unix time in seconds; accepted within 5 minutes.
+- `X-TT-Signature`: lowercase hex HMAC-SHA256 of `<timestamp>.<raw request body>` using the HMAC secret.
+
+The token is sent as-is; the HMAC secret never travels in the request. Both must be correct.
+
+The body accepts 1–20 players. `platform` is `twitch` or `tiktok`, and usernames are normalized to lowercase. `duration_seconds` is optional and defaults to `1320` (22 minutes).
+
+```json
+{
+  "players": [
+    {"platform": "twitch", "username": "exact_twitch_name"},
+    {"platform": "tiktok", "username": "exact_tiktok_name"}
+  ]
+}
+```
+
+Sign the exact bytes you send, for example with `requests`:
+
+```python
+import hashlib
+import hmac
+import json
+import time
+
+import requests
+
+token = "same value as TT_GAME_WEBHOOK_TOKEN"
+secret = "same value as TT_GAME_WEBHOOK_SECRET"
+body = json.dumps(
+    {"players": [{"platform": "twitch", "username": "exact_twitch_name"}]},
+    separators=(",", ":"),
+).encode()
+timestamp = str(int(time.time()))
+signature = hmac.new(
+    secret.encode(), timestamp.encode() + b"." + body, hashlib.sha256
+).hexdigest()
+response = requests.post(
+    "https://tt.peltux.xyz/api/game/players",
+    data=body,
+    headers={
+        "Content-Type": "application/json",
+        "X-TT-Token": token,
+        "X-TT-Timestamp": timestamp,
+        "X-TT-Signature": signature,
+    },
+    timeout=10,
+)
+```
+
+The response reports one result per unique player, with `status` set to `starting`, `recording`, `offline`, or `error`. Recording IDs are included when a recording was queued or was already active.
+
+A complete client guide for the PC-side AI is in [docs/game-webhook-client.md](docs/game-webhook-client.md).
+
 ### Browser Session Reuse (Playwright)
 
 `web.session` loads the same Netscape cookie file into Playwright, so a session created by logging in manually in your browser can be reused. It does not perform password login.

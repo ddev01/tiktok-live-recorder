@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 import sys
 import time
 from pathlib import Path
@@ -11,12 +14,13 @@ import web.app as app_module  # noqa: E402
 from web.app import create_app  # noqa: E402
 
 
-def make_app(tmp_path):
+def make_app(tmp_path, **config):
     return create_app(
         {
             "TESTING": True,
             "DATABASE": str(tmp_path / "state.sqlite3"),
             "RECORDINGS_DIR": str(tmp_path / "recordings"),
+            **config,
         }
     )
 
@@ -186,7 +190,7 @@ def test_duration_patch_and_watchlist_validation(tmp_path):
         "/api/watchlist", json={"username": "onceuser", "mode": "once"}
     )
     assert response.status_code == 201
-    assert response.json["duration_seconds"] == 1800
+    assert response.json["duration_seconds"] == 1320
     response = client.post(
         "/api/watchlist", json={"username": "creator", "mode": "always"}
     )
@@ -559,3 +563,114 @@ def test_same_handle_can_record_on_both_platforms(tmp_path, monkeypatch):
     assert tiktok.json["id"] != twitch.json["id"]
     assert tiktok.json["platform"] == "tiktok"
     assert twitch.json["platform"] == "twitch"
+
+
+def signed_game_post(client, payload, secret, timestamp=None, token="test-token"):
+    body = json.dumps(payload).encode()
+    sent_at = str(int(time.time() if timestamp is None else timestamp))
+    signature = hmac.new(
+        secret.encode(), sent_at.encode() + b"." + body, hashlib.sha256
+    ).hexdigest()
+    return client.post(
+        "/api/game/players",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-TT-Token": token,
+            "X-TT-Timestamp": sent_at,
+            "X-TT-Signature": signature,
+        },
+    )
+
+
+def test_game_webhook_requires_a_valid_token_and_signature(tmp_path):
+    app = make_app(
+        tmp_path, GAME_WEBHOOK_SECRET="test-secret", GAME_WEBHOOK_TOKEN="test-token"
+    )
+    client = app.test_client()
+    payload = {"players": [{"platform": "twitch", "username": "creator"}]}
+    assert client.post("/api/game/players", json=payload).status_code == 401
+    assert (
+        client.post(
+            "/api/game/players",
+            json=payload,
+            headers={
+                "X-TT-Token": "wrong-token",
+                "X-TT-Timestamp": str(int(time.time())),
+                "X-TT-Signature": "0" * 64,
+            },
+        ).status_code
+        == 401
+    )
+    assert (
+        signed_game_post(
+            client, payload, "test-secret", token="wrong-token"
+        ).status_code
+        == 401
+    )
+    assert (
+        signed_game_post(client, payload, "test-secret", time.time() - 301).status_code
+        == 401
+    )
+    assert (
+        signed_game_post(client, payload, "wrong-secret").status_code == 401
+    )
+
+
+def test_game_webhook_is_disabled_without_both_credentials(tmp_path):
+    client = make_app(tmp_path).test_client()
+    assert (
+        client.post("/api/game/players", json={"players": []}).status_code == 503
+    )
+    client = make_app(
+        tmp_path / "secret-only", GAME_WEBHOOK_SECRET="test-secret"
+    ).test_client()
+    assert (
+        client.post("/api/game/players", json={"players": []}).status_code == 503
+    )
+
+
+def test_game_webhook_queues_multiple_players_with_default_duration(
+    tmp_path, monkeypatch
+):
+    app = make_app(
+        tmp_path, GAME_WEBHOOK_SECRET="test-secret", GAME_WEBHOOK_TOKEN="test-token"
+    )
+    monkeypatch.setattr(
+        app_module, "_resolve_live", lambda username, platform="tiktok": True
+    )
+    payload = {
+        "players": [
+            {"platform": "Twitch", "username": "Test_User"},
+            {"platform": "TikTok", "username": "@Creator"},
+            {"platform": "twitch", "username": "test_user"},
+        ]
+    }
+    response = signed_game_post(app.test_client(), payload, "test-secret")
+    assert response.status_code == 200
+    results = response.json["results"]
+    assert [(item["username"], item["platform"]) for item in results] == [
+        ("test_user", "twitch"),
+        ("creator", "tiktok"),
+    ]
+    assert all(item["status"] == "starting" for item in results)
+    assert all(item["duration_seconds"] == 1320 for item in results)
+    recordings = app.extensions["tt_clipper_store"].recordings()
+    assert {(item["username"], item["platform"]) for item in recordings} == {
+        ("test_user", "twitch"),
+        ("creator", "tiktok"),
+    }
+    assert all(item["duration_seconds"] == 1320 for item in recordings)
+
+
+def test_game_webhook_rejects_an_invalid_username(tmp_path):
+    app = make_app(
+        tmp_path, GAME_WEBHOOK_SECRET="test-secret", GAME_WEBHOOK_TOKEN="test-token"
+    )
+    response = signed_game_post(
+        app.test_client(),
+        {"players": [{"platform": "twitch", "username": "not a user!"}]},
+        "test-secret",
+    )
+    assert response.status_code == 400
+    assert not app.extensions["tt_clipper_store"].recordings()

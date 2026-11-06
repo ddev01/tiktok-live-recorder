@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 import re
 import threading
@@ -14,11 +16,30 @@ from web.store import Store
 from web.worker import LOW_DISK_BYTES, disk_status
 
 
-DEFAULT_DURATION = 1800
-ALLOWED_DURATIONS = {30, 900, 1800, 3600, 14400, 28800}
+DEFAULT_DURATION = 1320
+ALLOWED_DURATIONS = {30, 900, 1320, 1800, 3600, 14400, 28800}
+GAME_WEBHOOK_MAX_SKEW = 300
 HANDLE_RE = TIKTOK_HANDLE_RE
 TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}
 TWITCH_HOSTS = {"twitch.tv", "www.twitch.tv", "m.twitch.tv"}
+
+
+def _env_secret(env_name, file_env_name):
+    value = os.environ.get(env_name, "").strip()
+    if value:
+        return value
+    path = os.environ.get(file_env_name, "").strip()
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _game_signature(secret, timestamp, body):
+    message = str(timestamp).encode("utf-8") + b"." + body
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
 def _duration(value, default=None):
@@ -30,7 +51,7 @@ def _duration(value, default=None):
         or value not in ALLOWED_DURATIONS
     ):
         raise ValueError(
-            "duration_seconds must be 30, 900, 1800, 3600, 14400, 28800, or null"
+            "duration_seconds must be 30, 900, 1320, 1800, 3600, 14400, 28800, or null"
         )
     return value
 
@@ -157,6 +178,12 @@ def create_app(test_config=None):
         RECORDINGS_DIR=os.environ.get(
             "RECORDINGS_DIR", os.environ.get("OUTPUT_DIR", "output")
         ),
+        GAME_WEBHOOK_SECRET=_env_secret(
+            "TT_GAME_WEBHOOK_SECRET", "TT_GAME_WEBHOOK_SECRET_FILE"
+        ),
+        GAME_WEBHOOK_TOKEN=_env_secret(
+            "TT_GAME_WEBHOOK_TOKEN", "TT_GAME_WEBHOOK_TOKEN_FILE"
+        ),
     )
     if test_config:
         app.config.update(test_config)
@@ -199,6 +226,29 @@ def create_app(test_config=None):
                     pass
 
             threading.Thread(target=_cache, daemon=True).start()
+
+    def _queue_recording(username, platform, duration):
+        _remember(username, platform)
+        active = store.active_recording(username, platform)
+        if active:
+            return _recording_payload(active), 200
+        if disk_status(recordings_dir)["low_disk"]:
+            return {
+                "error": "Recording blocked: less than 2 GB of free disk space"
+            }, 507
+        try:
+            live = _resolve_live(username, platform)
+        except Exception:
+            return {"error": "Could not check whether this account is live"}, 502
+        if not live:
+            return {"status": "offline", "username": username, "platform": platform}, 200
+        try:
+            recording, created = store.enqueue_recording(
+                username, duration, platform=platform
+            )
+        except Exception:
+            return {"error": "Could not queue this recording"}, 500
+        return _recording_payload(recording), 201 if created else 200
 
     @app.context_processor
     def nav_page():
@@ -323,32 +373,86 @@ def create_app(test_config=None):
         except ValueError as error:
             return jsonify(error=str(error)), 400
 
-        _remember(username, platform)
-        active = store.active_recording(username, platform)
-        if active:
-            return jsonify(_recording_payload(active)), 200
-        if disk_status(recordings_dir)["low_disk"]:
-            return jsonify(
-                error="Recording blocked: less than 2 GB of free disk space"
-            ), 507
+        payload, status = _queue_recording(username, platform, duration)
+        return jsonify(payload), status
 
+    @app.post("/api/game/players")
+    def game_players():
+        secret = app.config.get("GAME_WEBHOOK_SECRET")
+        token = app.config.get("GAME_WEBHOOK_TOKEN")
+        if not secret or not token:
+            return jsonify(error="Game webhook is not configured"), 503
+        request_token = request.headers.get("X-TT-Token", "").strip()
+        if not request_token or not hmac.compare_digest(
+            request_token.encode("utf-8"), token.encode("utf-8")
+        ):
+            return jsonify(error="Invalid token or signature"), 401
+        body_bytes = request.get_data(cache=True)
+        timestamp = request.headers.get("X-TT-Timestamp", "").strip()
+        signature = request.headers.get("X-TT-Signature", "").strip().lower()
         try:
-            live = _resolve_live(username, platform)
-        except Exception:
-            return jsonify(
-                error="Could not check whether this account is live"
-            ), 502
-        if not live:
-            return jsonify(status="offline", username=username, platform=platform), 200
+            sent_at = int(timestamp)
+        except ValueError:
+            sent_at = 0
+        expected = _game_signature(secret, timestamp, body_bytes)
+        if (
+            not timestamp
+            or len(signature) != 64
+            or any(char not in "0123456789abcdef" for char in signature)
+            or abs(time.time() - sent_at) > GAME_WEBHOOK_MAX_SKEW
+            or not hmac.compare_digest(expected, signature)
+        ):
+            return jsonify(error="Invalid token or signature"), 401
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("players"), list):
+            return jsonify(error="players is required"), 400
+        if not 1 <= len(body["players"]) <= 20:
+            return jsonify(error="players must contain 1 to 20 entries"), 400
         try:
-            recording, created = store.enqueue_recording(
-                username, duration, platform=platform
-            )
-        except Exception:
-            return jsonify(error="Could not queue this recording"), 500
-        if not created:
-            return jsonify(_recording_payload(recording)), 200
-        return jsonify(_recording_payload(recording)), 201
+            duration = _duration(body.get("duration_seconds"), DEFAULT_DURATION)
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+
+        players = []
+        seen = set()
+        for item in body["players"]:
+            if not isinstance(item, dict) or not isinstance(
+                item.get("username"), str
+            ):
+                return jsonify(error="Each player needs a username"), 400
+            try:
+                platform = item.get("platform")
+                if isinstance(platform, str):
+                    platform = platform.lower()
+                platform = _platform(platform)
+            except ValueError as error:
+                return jsonify(error=str(error)), 400
+            username = item["username"].strip().lstrip("@").lower()
+            if not _handle_re(platform).fullmatch(username):
+                return jsonify(
+                    error=f"Invalid {platform} username: {username or '(empty)'}"
+                ), 400
+            if (username, platform) not in seen:
+                seen.add((username, platform))
+                players.append((username, platform))
+
+        results = []
+        for username, platform in players:
+            payload, status = _queue_recording(username, platform, duration)
+            result = {
+                "username": username,
+                "platform": platform,
+                "status": payload.get("status")
+                or ("error" if "error" in payload else None),
+                "duration_seconds": payload.get("duration_seconds", duration),
+            }
+            if "id" in payload:
+                result["recording_id"] = payload["id"]
+            if "error" in payload:
+                result["error"] = payload["error"]
+            results.append(result)
+        return jsonify(results=results), 200
 
     @app.get("/api/recordings")
     def recordings():

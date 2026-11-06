@@ -13,6 +13,22 @@ This deploys only this app as a Docker Swarm stack on the existing single VPS no
 
 The session cookie is supplied only through the existing external Swarm secret `tiktok_session_ss`; the stack maps it to `/run/secrets/tiktok_session_ss` and sets `TIKTOK_SESSION_SS_FILE`. It must be a Netscape HTTP Cookie File so Streamlink can read it without putting cookie values in process arguments. Provision that secret separately before deployment. The deploy script only checks that it exists; it never creates or reads it. The application must not expose cookie values.
 
+The game webhook uses two external Swarm secrets, `game_webhook_secret` and `game_webhook_token`, mapped to `/run/secrets/game_webhook_secret` and `/run/secrets/game_webhook_token` through `TT_GAME_WEBHOOK_SECRET_FILE` and `TT_GAME_WEBHOOK_TOKEN_FILE`. Generate random values, keep them in the PC client's configuration, and provision them on the VPS without putting them in Git or a command argument:
+
+```sh
+read -r -s -p 'Game webhook secret: ' WEBHOOK_SECRET
+printf '\n'
+printf '%s' "$WEBHOOK_SECRET" | docker secret create game_webhook_secret -
+unset WEBHOOK_SECRET
+
+read -r -s -p 'Game webhook token: ' WEBHOOK_TOKEN
+printf '\n'
+printf '%s' "$WEBHOOK_TOKEN" | docker secret create game_webhook_token -
+unset WEBHOOK_TOKEN
+```
+
+Without either secret the webhook endpoint returns `503`; `deploy.sh` refuses to deploy until both exist. The request format and signing example are in the [README](../README.md#game-webhook), and the PC-side client guide is in [game-webhook-client.md](game-webhook-client.md).
+
 Streamlink retries initial opens, but cannot resume an already-open broken FLV stream. The worker finalizes a playable partial MP4 and marks it interrupted; it deliberately does not concatenate separate live connections.
 
 Create it interactively on the VPS so the value is not put in Git or a command argument:

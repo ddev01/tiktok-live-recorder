@@ -56,6 +56,14 @@ if ! docker secret inspect tiktok_session_ss >/dev/null 2>&1; then
   echo "Required Swarm secret 'tiktok_session_ss' is missing. Provision it on the server, then retry; this script will not create or read it." >&2
   exit 1
 fi
+if ! docker secret inspect game_webhook_secret >/dev/null 2>&1; then
+  echo "Required Swarm secret 'game_webhook_secret' is missing. Provision it on the server, then retry; this script will not create or read it." >&2
+  exit 1
+fi
+if ! docker secret inspect game_webhook_token >/dev/null 2>&1; then
+  echo "Required Swarm secret 'game_webhook_token' is missing. Provision it on the server, then retry; this script will not create or read it." >&2
+  exit 1
+fi
 if ! docker network inspect infra-public >/dev/null 2>&1; then
   echo "Required external Docker network 'infra-public' is missing." >&2
   exit 1

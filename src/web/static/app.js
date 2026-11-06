@@ -215,7 +215,7 @@
       }
     }
 
-    async function startRecording(query, durationSeconds = 1800) {
+    async function startRecording(query, durationSeconds = 1320) {
       if (!query.trim()) { input.focus(); return; }
       currentUsername = query.trim();
       setExpanded(false);
