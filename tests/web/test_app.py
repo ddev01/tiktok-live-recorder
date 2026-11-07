@@ -565,14 +565,16 @@ def test_same_handle_can_record_on_both_platforms(tmp_path, monkeypatch):
     assert twitch.json["platform"] == "twitch"
 
 
-def signed_game_post(client, payload, secret, timestamp=None, token="test-token"):
+def signed_game_post(
+    client, payload, secret, timestamp=None, token="test-token", path="/api/game/players"
+):
     body = json.dumps(payload).encode()
     sent_at = str(int(time.time() if timestamp is None else timestamp))
     signature = hmac.new(
         secret.encode(), sent_at.encode() + b"." + body, hashlib.sha256
     ).hexdigest()
     return client.post(
-        "/api/game/players",
+        path,
         data=body,
         headers={
             "Content-Type": "application/json",
@@ -674,3 +676,199 @@ def test_game_webhook_rejects_an_invalid_username(tmp_path):
     )
     assert response.status_code == 400
     assert not app.extensions["tt_clipper_store"].recordings()
+
+
+def _game_event(**overrides):
+    event = {
+        "platform": "twitch",
+        "username": "bop123",
+        "kind": "elimination",
+        "event_at": time.time(),
+        "actor": "Sophie123",
+        "actor_role": "teammate",
+        "victim": "TTV_bop123",
+        "victim_role": "streamer",
+    }
+    event.update(overrides)
+    return event
+
+
+def _started_recording(tmp_path, monkeypatch, started_at):
+    app = make_app(
+        tmp_path,
+        GAME_WEBHOOK_SECRET="test-secret",
+        GAME_WEBHOOK_TOKEN="test-token",
+    )
+    monkeypatch.setattr(
+        app_module, "_resolve_live", lambda username, platform="tiktok": True
+    )
+    client = app.test_client()
+    response = client.post(
+        "/api/recordings", json={"query": "bop123", "platform": "twitch"}
+    )
+    assert response.status_code == 201
+    recording_id = response.json["id"]
+    with app.extensions["tt_clipper_store"].connect() as connection:
+        connection.execute(
+            "UPDATE recordings SET status = 'recording', created_at = ?, "
+            "started_at = ? WHERE id = ?",
+            (started_at, started_at, recording_id),
+        )
+    return app, client, recording_id
+
+
+def test_game_events_require_a_valid_token_and_signature(tmp_path):
+    app = make_app(
+        tmp_path, GAME_WEBHOOK_SECRET="test-secret", GAME_WEBHOOK_TOKEN="test-token"
+    )
+    client = app.test_client()
+    payload = {"events": [_game_event()]}
+    path = "/api/game/events"
+    assert client.post(path, json=payload).status_code == 401
+    assert (
+        signed_game_post(
+            client,
+            payload,
+            "test-secret",
+            token="wrong-token",
+            path=path,
+        ).status_code
+        == 401
+    )
+    assert (
+        signed_game_post(
+            client, payload, "wrong-secret", path=path
+        ).status_code
+        == 401
+    )
+    assert (
+        signed_game_post(
+            client, payload, "test-secret", time.time() - 301, path=path
+        ).status_code
+        == 401
+    )
+
+
+def test_game_events_are_disabled_without_both_credentials(tmp_path):
+    client = make_app(tmp_path).test_client()
+    assert (
+        client.post("/api/game/events", json={"events": []}).status_code == 503
+    )
+
+
+def test_game_events_are_stored_with_offsets_and_seek_times(tmp_path, monkeypatch):
+    now = time.time()
+    app, client, recording_id = _started_recording(
+        tmp_path, monkeypatch, now - 400
+    )
+    payload = {
+        "events": [
+            _game_event(event_at=now - 10, kind="knock"),
+            _game_event(
+                event_at=now - 5,
+                actor="TTV_bop123",
+                actor_role="streamer",
+                victim="Sophie123",
+                victim_role="teammate",
+            ),
+        ]
+    }
+    response = signed_game_post(
+        client, payload, "test-secret", path="/api/game/events"
+    )
+    assert response.status_code == 200
+    assert [item["status"] for item in response.json["results"]] == [
+        "stored",
+        "stored",
+    ]
+    assert all(
+        item["recording_id"] == recording_id for item in response.json["results"]
+    )
+
+    events = client.get(f"/api/recordings/{recording_id}/events").json["events"]
+    assert [event["kind"] for event in events] == ["knock", "elimination"]
+    assert [event["actor_role"] for event in events] == ["teammate", "streamer"]
+    assert events[0]["offset_seconds"] == 390
+    assert events[0]["seek_seconds"] == 380
+    assert events[1]["offset_seconds"] == 395
+    assert events[1]["seek_seconds"] == 385
+
+    duplicate = signed_game_post(
+        client, payload, "test-secret", path="/api/game/events"
+    )
+    assert [item["status"] for item in duplicate.json["results"]] == [
+        "duplicate",
+        "duplicate",
+    ]
+    assert len(client.get(f"/api/recordings/{recording_id}/events").json["events"]) == 2
+
+
+def test_game_events_ignore_accounts_without_a_recording(tmp_path):
+    app = make_app(
+        tmp_path, GAME_WEBHOOK_SECRET="test-secret", GAME_WEBHOOK_TOKEN="test-token"
+    )
+    response = signed_game_post(
+        app.test_client(),
+        {"events": [_game_event()]},
+        "test-secret",
+        path="/api/game/events",
+    )
+    assert response.status_code == 200
+    assert response.json["results"] == [
+        {
+            "platform": "twitch",
+            "username": "bop123",
+            "status": "ignored",
+            "reason": "no_recording",
+        }
+    ]
+    assert app.extensions["tt_clipper_store"].recording_events(1) == []
+
+
+def test_game_events_are_deleted_with_the_recording(tmp_path, monkeypatch):
+    now = time.time()
+    app, client, recording_id = _started_recording(
+        tmp_path, monkeypatch, now - 100
+    )
+    assert (
+        signed_game_post(
+            client,
+            {"events": [_game_event(event_at=now - 5)]},
+            "test-secret",
+            path="/api/game/events",
+        ).status_code
+        == 200
+    )
+    with app.extensions["tt_clipper_store"].connect() as connection:
+        connection.execute(
+            "UPDATE recordings SET status = 'completed', finished_at = ? WHERE id = ?",
+            (now, recording_id),
+        )
+    assert client.delete(f"/api/recordings/{recording_id}").status_code == 204
+    assert app.extensions["tt_clipper_store"].recording_events(recording_id) == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"kind": "kill"},
+        {"event_at": "now"},
+        {"event_at": time.time() + 601},
+        {"actor": ""},
+        {"username": "not a user!"},
+        {"actor_role": "streamer", "victim_role": "streamer_teammate"},
+        {"actor_role": "self", "victim_role": "teammate"},
+        {"actor_role": "unknown", "victim_role": "streamer"},
+    ],
+)
+def test_game_events_reject_invalid_payloads(tmp_path, overrides):
+    app = make_app(
+        tmp_path, GAME_WEBHOOK_SECRET="test-secret", GAME_WEBHOOK_TOKEN="test-token"
+    )
+    response = signed_game_post(
+        app.test_client(),
+        {"events": [_game_event(**overrides)]},
+        "test-secret",
+        path="/api/game/events",
+    )
+    assert response.status_code == 400

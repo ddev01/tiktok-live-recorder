@@ -27,7 +27,7 @@ printf '%s' "$WEBHOOK_TOKEN" | docker secret create game_webhook_token -
 unset WEBHOOK_TOKEN
 ```
 
-Without either secret the webhook endpoint returns `503`; `deploy.sh` refuses to deploy until both exist. The request format and signing example are in the [README](../README.md#game-webhook), and the PC-side client guide is in [game-webhook-client.md](game-webhook-client.md).
+Without either secret the webhook endpoints (`/api/game/players` and `/api/game/events`) return `503`; `deploy.sh` refuses to deploy until both exist. The request format and signing example are in the [README](../README.md#game-webhook), and the PC-side client guide is in [game-webhook-client.md](game-webhook-client.md).
 
 Streamlink retries initial opens, but cannot resume an already-open broken FLV stream. The worker finalizes a playable partial MP4 and marks it interrupted; it deliberately does not concatenate separate live connections.
 

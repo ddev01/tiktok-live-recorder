@@ -339,6 +339,31 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 }
 .btn-danger:disabled { opacity: 0.55; }
 
+.recording-player {
+  overflow: hidden; border: 1px solid var(--admin-hairline); border-radius: 10px; background: #000;
+}
+.recording-video { display: block; width: 100%; max-height: 70vh; background: #000; }
+.recording-events { margin: 0; }
+.event-list { display: grid; gap: 0.35rem; margin: 0; padding: 0; list-style: none; }
+.event-row {
+  display: flex; align-items: center; gap: 0.75rem; width: 100%; padding: 0.55rem 0.65rem;
+  border: 1px solid var(--admin-hairline); border-radius: 0.5rem; background: var(--admin-canvas);
+  color: var(--admin-ink); text-align: left; cursor: pointer;
+}
+.event-row:hover:not(:disabled), .event-row.is-active {
+  border-color: var(--admin-blue);
+  background: color-mix(in srgb, var(--admin-blue) 8%, var(--admin-surface));
+}
+.event-row:disabled { opacity: 0.65; cursor: default; }
+.event-time {
+  min-width: 3.25rem; color: var(--admin-blue); font-family: ui-monospace, monospace;
+  font-size: 0.75rem; font-variant-numeric: tabular-nums;
+}
+.event-copy { display: grid; gap: 1px; min-width: 0; }
+.event-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; font-weight: 600; }
+.event-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--admin-mute); font-size: 0.6875rem; }
+.event-empty { margin: 0; color: var(--admin-mute); font-size: 0.8125rem; }
+
 @media (max-width: 760px) {
   .watchlist-grid { grid-template-columns: 1fr; }
   .recording-table { display: none; }

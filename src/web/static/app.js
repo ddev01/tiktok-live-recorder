@@ -43,6 +43,28 @@
     const secs = Math.floor(value % 60);
     return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${secs}s` : `${secs}s`;
   };
+  const formatClock = (seconds) => {
+    if (seconds == null || seconds === '') return '—';
+    const value = Math.floor(Number(seconds));
+    if (!Number.isFinite(value) || value < 0) return '—';
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.floor((value % 3600) / 60);
+    const secs = value % 60;
+    return hours
+      ? `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+      : `${minutes}:${String(secs).padStart(2, '0')}`;
+  };
+  const eventSide = (role, name) => {
+    if (role === 'self') return 'you';
+    if (role === 'streamer') return 'the streamer';
+    if (role === 'streamer_teammate') return `${name} (streamer's teammate)`;
+    return name;
+  };
+  const eventLabel = (event) => {
+    const verb = event.kind === 'knock' ? 'knocked out' : 'eliminated';
+    const sentence = `${eventSide(event.actor_role, event.actor)} ${verb} ${eventSide(event.victim_role, event.victim)}`;
+    return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+  };
   const statusClass = (status) => ({
     active: 'badge-success', recording: 'badge-success', completed: 'badge-neutral',
     stopped: 'badge-neutral', interrupted: 'badge-error', failed: 'badge-error', error: 'badge-error',
@@ -433,7 +455,49 @@
     };
     let recording;
     let refreshTimer;
+    let eventsKey = '';
     const spaceWarning = $('[data-recording-space-warning]');
+    const playerSection = $('[data-player-section]');
+    const video = $('[data-recording-video]');
+    const eventsList = $('[data-event-list]');
+    const eventsEmpty = $('[data-events-empty]');
+    const eventsCount = $('[data-events-count]');
+
+    const seekTo = (seconds) => {
+      const target = Number(seconds);
+      if (!video?.getAttribute('src') || !Number.isFinite(target)) {
+        showFeedback('Available when the recording finishes');
+        return;
+      }
+      const apply = () => {
+        video.currentTime = Math.max(0, target);
+        video.play().catch(() => {});
+        playerSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
+      if (video.readyState >= 1) apply();
+      else video.addEventListener('loadedmetadata', apply, { once: true });
+      $$('[data-seek]').forEach((row) => row.classList.toggle('is-active', row.dataset.seek === String(seconds)));
+    };
+
+    const renderEvent = (event) => {
+      const seek = event.seek_seconds == null ? null : Number(event.seek_seconds);
+      const disabled = seek == null || !Number.isFinite(seek);
+      return `<li><button class="event-row" type="button" data-seek="${escapeHTML(seek ?? '')}"${disabled ? ' disabled' : ''}><span class="event-time">${escapeHTML(formatClock(event.offset_seconds))}</span><span class="event-copy"><strong>${escapeHTML(eventLabel(event))}</strong><small>${escapeHTML(`${event.actor} → ${event.victim}`)}</small></span></button></li>`;
+    };
+
+    async function loadEvents() {
+      try {
+        const events = listFrom(await api(`/api/recordings/${encodeURIComponent(id)}/events`), 'events');
+        eventsCount.textContent = events.length;
+        eventsEmpty.hidden = events.length > 0;
+        const key = JSON.stringify(events.map((event) => [event.id, event.seek_seconds]));
+        if (key === eventsKey) return;
+        eventsKey = key;
+        eventsList.innerHTML = events.map(renderEvent).join('');
+        $$('[data-seek]', eventsList).forEach((button) => button.addEventListener('click', () => seekTo(button.dataset.seek)));
+      } catch { /* Events are optional; the recording is the primary content. */ }
+    }
+
     async function load() {
       try {
         recording = await api(`/api/recordings/${encodeURIComponent(id)}`);
@@ -470,17 +534,21 @@
           button.setAttribute('aria-pressed', String(selected));
           button.disabled = !active;
         });
-        const play = $('[data-play-link]'); const download = $('[data-download-link]'); const stop = $('[data-stop-recording]');
-        play.href = `/recordings/${encodeURIComponent(id)}/video`; download.href = `/recordings/${encodeURIComponent(id)}/download`;
+        const download = $('[data-download-link]'); const stop = $('[data-stop-recording]');
+        download.href = `/recordings/${encodeURIComponent(id)}/download`;
         if (recording.error) showFeedback(recording.error, true);
-        if (status === 'interrupted') {
-          play.textContent = 'Play';
-          download.textContent = 'Download';
-          if (!recording.error) showFeedback('Interrupted (partial saved)', true);
+        if (status === 'interrupted' && !recording.error) {
+          showFeedback('Interrupted (partial saved)', true);
         }
-        play.hidden = !playable; download.hidden = !playable; stop.hidden = !active;
+        download.hidden = !playable; stop.hidden = !active;
+        playerSection.hidden = !playable;
+        if (playable) {
+          const src = `/recordings/${encodeURIComponent(id)}/video`;
+          if (video.getAttribute('src') !== src) video.src = src;
+        }
         if (active && !refreshTimer) refreshTimer = setInterval(load, 3000);
         else if (!active && refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+        await loadEvents();
       } catch (error) {
         $('[data-recording-title]').textContent = 'Unavailable';
         $('[data-recording-subtitle]').textContent = '';

@@ -40,6 +40,20 @@ CREATE TABLE IF NOT EXISTS recent_searches (
     searched_at REAL NOT NULL,
     PRIMARY KEY (username, platform)
 );
+CREATE TABLE IF NOT EXISTS recording_events (
+    id INTEGER PRIMARY KEY,
+    recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('knock', 'elimination')),
+    actor TEXT NOT NULL,
+    actor_role TEXT NOT NULL CHECK(actor_role IN ('self', 'teammate', 'streamer', 'streamer_teammate')),
+    victim TEXT NOT NULL,
+    victim_role TEXT NOT NULL CHECK(victim_role IN ('self', 'teammate', 'streamer', 'streamer_teammate')),
+    event_at REAL NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE(recording_id, event_at, kind, actor, victim)
+);
+CREATE INDEX IF NOT EXISTS recording_events_recording
+    ON recording_events(recording_id, event_at);
 """
 
 WATCHLIST_REBUILD = """
@@ -308,3 +322,58 @@ class Store:
                 return existing, False
             raise
         return self.recording(recording_id), True
+
+    def recording_for_event(self, username, platform, event_at):
+        """Most recent recording for this account that can contain event_at."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM recordings WHERE username = ? AND platform = ? "
+                "AND created_at <= ? ORDER BY created_at DESC LIMIT 1",
+                (username, platform, event_at),
+            ).fetchone()
+        recording = dict(row) if row else None
+        if not recording:
+            return None
+        started_at = recording["started_at"]
+        finished_at = recording["finished_at"]
+        if started_at is not None and event_at < started_at - 1:
+            return None
+        if finished_at is not None and event_at > finished_at + 1:
+            return None
+        return recording
+
+    def add_recording_events(self, recording_id, events):
+        """Insert events; returns one bool per event, False for a duplicate."""
+        stored = []
+        with self.transaction() as connection:
+            for event in events:
+                cursor = connection.execute(
+                    "INSERT INTO recording_events(recording_id, kind, actor, "
+                    "actor_role, victim, victim_role, event_at, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(recording_id, event_at, kind, actor, victim) "
+                    "DO NOTHING",
+                    (
+                        recording_id,
+                        event["kind"],
+                        event["actor"],
+                        event["actor_role"],
+                        event["victim"],
+                        event["victim_role"],
+                        event["event_at"],
+                        event["created_at"],
+                    ),
+                )
+                stored.append(cursor.rowcount == 1)
+        return stored
+
+    def recording_events(self, recording_id):
+        with self.connect() as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM recording_events WHERE recording_id = ? "
+                    "ORDER BY event_at, id",
+                    (recording_id,),
+                )
+            ]

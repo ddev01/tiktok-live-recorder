@@ -181,6 +181,59 @@ Possible `status` values:
 
 Per-player problems such as low disk space appear inside a `200` response as `status: "error"` with an `error` field.
 
+## Kill and knock events
+
+`POST /api/game/events` records interactions between your squad and a recorded streamer's squad. It uses the same URL host, token, HMAC secret, headers and signing as the players batch. If `RECORDER_URL` ends in `/players`, replace that segment with `/events`.
+
+Send one request per event as soon as the feed row arrives. Do not wait for the match to end.
+
+```json
+{
+  "events": [
+    {
+      "platform": "twitch",
+      "username": "bop123",
+      "kind": "knock",
+      "event_at": 1762361234.5,
+      "actor": "Sophie123",
+      "actor_role": "teammate",
+      "victim": "TTV_bop123",
+      "victim_role": "streamer"
+    }
+  ]
+}
+```
+
+Rules:
+
+- `kind` is `knock` or `elimination`.
+- `actor_role` and `victim_role` are `self`, `teammate`, `streamer`, or `streamer_teammate`.
+- Exactly one side must be your team (`self`/`teammate`) and the other the streamer's team (`streamer`/`streamer_teammate`). A request with both sides on one team is rejected with `400`.
+- `username` is the recorded streamer's platform handle from the players request. `actor` and `victim` are the exact in-game names from the feed.
+- `event_at` is the PC's Unix time when the feed row arrived. The server requires it within the last 24 hours and no more than 60 seconds in the future.
+- Duplicates are ignored server-side by `(recording, event_at, kind, actor, victim)`, so a retry is safe.
+- The client does not need to track recording IDs: the server resolves the recording for `(platform, username)` at `event_at`.
+
+Response `200`:
+
+```json
+{
+  "results": [
+    {
+      "platform": "twitch",
+      "username": "bop123",
+      "status": "stored",
+      "recording_id": 42,
+      "offset_seconds": 312.5
+    }
+  ]
+}
+```
+
+`status` is `stored`, `duplicate`, or `ignored`. An `ignored` result has a `reason`; `no_recording` means the account was not being recorded around `event_at`. Treat `ignored` as informational and do not retry it.
+
+The server computes `offset_seconds` from the recording start and the website seeks 10 seconds before the event. The record's own playback latency is not corrected.
+
 ## Retries and idempotency
 
 The endpoint is effectively idempotent for active recordings: sending the same player again returns `recording` instead of creating a second capture.
@@ -206,6 +259,8 @@ Before reporting the client as complete:
 7. A valid request returns `200` with one result per unique player.
 8. Tokens and secrets never appear in logs.
 9. The request runs off the game thread with a timeout.
+10. Kill/knock events are sent immediately with an `event_at`, and a retry reuses the same `event_at`.
+11. Each event names the side for both the actor and the victim, so "me killing the streamer" and "my teammate killing the streamer" are distinguishable.
 
 ## Questions for the PC-side AI
 

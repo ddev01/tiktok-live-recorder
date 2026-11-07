@@ -20,6 +20,17 @@
       <div><span class="stat-label">Est.</span><strong data-recording-estimate>—</strong></div>
     </div>
     <div class="storage-alert recording-space-warning" role="status" hidden data-recording-space-warning></div>
+    <section class="recording-player" hidden data-player-section>
+      <video class="recording-video" controls preload="metadata" playsinline data-recording-video></video>
+    </section>
+    <section class="recording-events admin-section" aria-labelledby="events-heading">
+      <div class="section-heading">
+        <h2 id="events-heading" class="section-title">Interactions</h2>
+        <span class="section-count" data-events-count>0</span>
+      </div>
+      <p class="event-empty" data-events-empty>No kills or knocks against this streamer yet.</p>
+      <ol class="event-list" data-event-list></ol>
+    </section>
     <section class="duration-section admin-section" aria-labelledby="duration-heading">
       <h2 id="duration-heading" class="section-title">Stop after</h2>
       <div class="duration-options" role="group" aria-label="Duration">
@@ -34,7 +45,6 @@
     </section>
     <div class="detail-feedback" role="status" aria-live="polite" hidden data-detail-feedback></div>
     <div class="detail-actions">
-      <a class="btn btn-primary" data-play-link href="#" hidden>Play</a>
       <a class="btn btn-outline" data-download-link href="#" hidden>Download</a>
       <button class="btn btn-danger" type="button" data-stop-recording hidden>Stop</button>
     </div>

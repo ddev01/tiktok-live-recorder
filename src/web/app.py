@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import math
 import os
 import re
 import threading
@@ -19,6 +20,14 @@ from web.worker import LOW_DISK_BYTES, disk_status
 DEFAULT_DURATION = 1320
 ALLOWED_DURATIONS = {30, 900, 1320, 1800, 3600, 14400, 28800}
 GAME_WEBHOOK_MAX_SKEW = 300
+GAME_EVENT_MAX = 50
+GAME_EVENT_MAX_AGE = 86400
+GAME_EVENT_MAX_FUTURE = 60
+EVENT_LEAD_SECONDS = 10
+EVENT_ROLES = {"self", "teammate", "streamer", "streamer_teammate"}
+EVENT_OUR_ROLES = {"self", "teammate"}
+EVENT_STREAMER_ROLES = {"streamer", "streamer_teammate"}
+EVENT_KINDS = {"knock", "elimination"}
 HANDLE_RE = TIKTOK_HANDLE_RE
 TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}
 TWITCH_HOSTS = {"twitch.tv", "www.twitch.tv", "m.twitch.tv"}
@@ -66,6 +75,92 @@ def _platform(value):
 
 def _handle_re(platform):
     return TWITCH_HANDLE_RE if platform == "twitch" else HANDLE_RE
+
+
+def _game_auth_error(app):
+    secret = app.config.get("GAME_WEBHOOK_SECRET")
+    token = app.config.get("GAME_WEBHOOK_TOKEN")
+    if not secret or not token:
+        return jsonify(error="Game webhook is not configured"), 503
+    request_token = request.headers.get("X-TT-Token", "").strip()
+    if not request_token or not hmac.compare_digest(
+        request_token.encode("utf-8"), token.encode("utf-8")
+    ):
+        return jsonify(error="Invalid token or signature"), 401
+    body_bytes = request.get_data(cache=True)
+    timestamp = request.headers.get("X-TT-Timestamp", "").strip()
+    signature = request.headers.get("X-TT-Signature", "").strip().lower()
+    try:
+        sent_at = int(timestamp)
+    except ValueError:
+        sent_at = 0
+    expected = _game_signature(secret, timestamp, body_bytes)
+    if (
+        not timestamp
+        or len(signature) != 64
+        or any(char not in "0123456789abcdef" for char in signature)
+        or abs(time.time() - sent_at) > GAME_WEBHOOK_MAX_SKEW
+        or not hmac.compare_digest(expected, signature)
+    ):
+        return jsonify(error="Invalid token or signature"), 401
+    return None
+
+
+def _game_event(item, now):
+    if not isinstance(item, dict):
+        raise ValueError("Each event must be an object")
+    try:
+        platform = _platform(item.get("platform"))
+    except ValueError as error:
+        raise ValueError(str(error)) from error
+    username = item.get("username")
+    if not isinstance(username, str):
+        raise ValueError("Each event needs a username")
+    username = username.strip().lstrip("@").lower()
+    if not _handle_re(platform).fullmatch(username):
+        raise ValueError(f"Invalid {platform} username: {username or '(empty)'}")
+    kind = item.get("kind")
+    if kind not in EVENT_KINDS:
+        raise ValueError("kind must be knock or elimination")
+    event_at = item.get("event_at")
+    if (
+        isinstance(event_at, bool)
+        or not isinstance(event_at, (int, float))
+        or not math.isfinite(event_at)
+    ):
+        raise ValueError("event_at must be Unix seconds")
+    event_at = float(event_at)
+    if event_at > now + GAME_EVENT_MAX_FUTURE or event_at < now - GAME_EVENT_MAX_AGE:
+        raise ValueError("event_at is outside the accepted time window")
+    actor = item.get("actor")
+    victim = item.get("victim")
+    for name in (actor, victim):
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 64:
+            raise ValueError("actor and victim must be non-empty names")
+    actor_role = item.get("actor_role")
+    victim_role = item.get("victim_role")
+    if actor_role not in EVENT_ROLES or victim_role not in EVENT_ROLES:
+        raise ValueError(
+            "actor_role and victim_role must be self, teammate, streamer, "
+            "or streamer_teammate"
+        )
+    if not (
+        (actor_role in EVENT_OUR_ROLES and victim_role in EVENT_STREAMER_ROLES)
+        or (actor_role in EVENT_STREAMER_ROLES and victim_role in EVENT_OUR_ROLES)
+    ):
+        raise ValueError(
+            "Each event needs one side on your team and one side on the streamer's team"
+        )
+    return {
+        "platform": platform,
+        "username": username,
+        "kind": kind,
+        "event_at": event_at,
+        "actor": actor.strip(),
+        "actor_role": actor_role,
+        "victim": victim.strip(),
+        "victim_role": victim_role,
+    }
 
 
 def _username_from_query(query, platform="tiktok"):
@@ -378,31 +473,9 @@ def create_app(test_config=None):
 
     @app.post("/api/game/players")
     def game_players():
-        secret = app.config.get("GAME_WEBHOOK_SECRET")
-        token = app.config.get("GAME_WEBHOOK_TOKEN")
-        if not secret or not token:
-            return jsonify(error="Game webhook is not configured"), 503
-        request_token = request.headers.get("X-TT-Token", "").strip()
-        if not request_token or not hmac.compare_digest(
-            request_token.encode("utf-8"), token.encode("utf-8")
-        ):
-            return jsonify(error="Invalid token or signature"), 401
-        body_bytes = request.get_data(cache=True)
-        timestamp = request.headers.get("X-TT-Timestamp", "").strip()
-        signature = request.headers.get("X-TT-Signature", "").strip().lower()
-        try:
-            sent_at = int(timestamp)
-        except ValueError:
-            sent_at = 0
-        expected = _game_signature(secret, timestamp, body_bytes)
-        if (
-            not timestamp
-            or len(signature) != 64
-            or any(char not in "0123456789abcdef" for char in signature)
-            or abs(time.time() - sent_at) > GAME_WEBHOOK_MAX_SKEW
-            or not hmac.compare_digest(expected, signature)
-        ):
-            return jsonify(error="Invalid token or signature"), 401
+        auth_error = _game_auth_error(app)
+        if auth_error:
+            return auth_error
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict) or not isinstance(body.get("players"), list):
@@ -454,6 +527,67 @@ def create_app(test_config=None):
             results.append(result)
         return jsonify(results=results), 200
 
+    @app.post("/api/game/events")
+    def game_events():
+        auth_error = _game_auth_error(app)
+        if auth_error:
+            return auth_error
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("events"), list):
+            return jsonify(error="events is required"), 400
+        if not 1 <= len(body["events"]) <= GAME_EVENT_MAX:
+            return jsonify(
+                error=f"events must contain 1 to {GAME_EVENT_MAX} entries"
+            ), 400
+        now = time.time()
+        try:
+            items = [_game_event(item, now) for item in body["events"]]
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+
+        results = [None] * len(items)
+        grouped = {}
+        for index, item in enumerate(items):
+            recording = store.recording_for_event(
+                item["username"], item["platform"], item["event_at"]
+            )
+            if not recording:
+                results[index] = {
+                    "platform": item["platform"],
+                    "username": item["username"],
+                    "status": "ignored",
+                    "reason": "no_recording",
+                }
+                continue
+            grouped.setdefault(recording["id"], []).append((index, item, recording))
+            results[index] = {
+                "platform": item["platform"],
+                "username": item["username"],
+                "status": "ignored",
+                "reason": "not_stored",
+            }
+
+        for recording_id, entries in grouped.items():
+            stored = store.add_recording_events(
+                recording_id,
+                [{**item, "created_at": now} for _, item, _ in entries],
+            )
+            for (index, item, recording), was_stored in zip(entries, stored):
+                started_at = recording["started_at"]
+                results[index] = {
+                    "platform": item["platform"],
+                    "username": item["username"],
+                    "status": "stored" if was_stored else "duplicate",
+                    "recording_id": recording_id,
+                    "offset_seconds": (
+                        round(item["event_at"] - started_at, 3)
+                        if started_at is not None
+                        else None
+                    ),
+                }
+        return jsonify(results=results), 200
+
     @app.get("/api/recordings")
     def recordings():
         return jsonify(
@@ -466,6 +600,32 @@ def create_app(test_config=None):
         if not recording:
             abort(404)
         return jsonify(_recording_payload(recording))
+
+    @app.get("/api/recordings/<int:recording_id>/events")
+    def get_recording_events(recording_id):
+        recording = store.recording(recording_id)
+        if not recording:
+            abort(404)
+        started_at = recording["started_at"]
+        events = []
+        for event in store.recording_events(recording_id):
+            offset = None
+            if started_at is not None:
+                offset = round(event["event_at"] - started_at, 3)
+                if offset < 0:
+                    continue
+            events.append(
+                {
+                    **event,
+                    "offset_seconds": offset,
+                    "seek_seconds": (
+                        max(0.0, round(offset - EVENT_LEAD_SECONDS, 3))
+                        if offset is not None
+                        else None
+                    ),
+                }
+            )
+        return jsonify(events=events)
 
     @app.patch("/api/recordings/<int:recording_id>")
     def update_recording(recording_id):

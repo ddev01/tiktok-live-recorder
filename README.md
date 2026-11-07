@@ -191,6 +191,16 @@ response = requests.post(
 
 The response reports one result per unique player, with `status` set to `starting`, `recording`, `offline`, or `error`. Recording IDs are included when a recording was queued or was already active.
 
+### Game events
+
+`POST /api/game/events` records kill-feed interactions for a recorded streamer. It uses the same token, HMAC secret and headers as the players endpoint. Each event has exactly one side on your team and one side on the streamer's team (`self`/`teammate` vs `streamer`/`streamer_teammate`):
+
+```json
+{"events":[{"platform":"twitch","username":"bop123","kind":"knock","event_at":1762361234.5,"actor":"Sophie123","actor_role":"teammate","victim":"TTV_bop123","victim_role":"streamer"}]}
+```
+
+`kind` is `knock` or `elimination`. The server resolves the matching recording by account and `event_at`, returns `status: "ignored"` when there is none, and deduplicates retries. `GET /api/recordings/<id>/events` returns stored events with `offset_seconds` and `seek_seconds` (10 seconds before the event); the recording page embeds the player and seeks when an event is clicked.
+
 A complete client guide for the PC-side AI is in [docs/game-webhook-client.md](docs/game-webhook-client.md).
 
 ### Browser Session Reuse (Playwright)
