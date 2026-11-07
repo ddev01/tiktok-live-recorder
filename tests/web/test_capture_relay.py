@@ -50,37 +50,42 @@ def test_relay_rejects_non_flv_input():
     assert sink.closed
 
 
-def test_retag_hevc_rewrites_hev1_for_quicktime(tmp_path, monkeypatch):
-    path = tmp_path / "clip.mp4"
-    path.write_bytes(b"original")
+def test_remux_tags_hevc_as_hvc1_for_quicktime(tmp_path, monkeypatch):
+    source = tmp_path / "clip.part.ts"
+    source.write_bytes(b"ts")
+    output = tmp_path / "clip.mp4"
     calls = []
 
     def fake_run(args, **_kwargs):
         calls.append(args)
         if args[0] == "ffprobe":
-            return SimpleNamespace(returncode=0, stdout="hevc,hev1\n")
-        Path(args[-1]).write_bytes(b"retagged")
+            return SimpleNamespace(returncode=0, stdout="hevc\n\nhevc\n")
+        output.write_bytes(b"remuxed")
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(capture.subprocess, "run", fake_run)
-    capture.retag_hevc(path)
+    assert capture.remux(source, output, None) is True
 
-    assert path.read_bytes() == b"retagged"
-    assert calls[-1][-1].endswith(".hvc1.tmp.mp4")
+    assert output.read_bytes() == b"remuxed"
+    assert calls[-1][-1] == str(output)
     assert calls[-1][calls[-1].index("-tag:v") + 1] == "hvc1"
 
 
-def test_retag_hevc_leaves_h264_recording_alone(tmp_path, monkeypatch):
-    path = tmp_path / "clip.mp4"
-    path.write_bytes(b"original")
+def test_remux_leaves_h264_untagged_and_drops_failed_output(tmp_path, monkeypatch):
+    source = tmp_path / "clip.part.ts"
+    source.write_bytes(b"ts")
+    output = tmp_path / "clip.mp4"
     calls = []
 
     def fake_run(args, **_kwargs):
         calls.append(args)
-        return SimpleNamespace(returncode=0, stdout="h264,avc1\n")
+        if args[0] == "ffprobe":
+            return SimpleNamespace(returncode=0, stdout="h264\n")
+        output.write_bytes(b"broken")
+        return SimpleNamespace(returncode=1)
 
     monkeypatch.setattr(capture.subprocess, "run", fake_run)
-    capture.retag_hevc(path)
+    assert capture.remux(source, output, None) is False
 
-    assert path.read_bytes() == b"original"
-    assert len(calls) == 1
+    assert "-tag:v" not in calls[-1]
+    assert not output.exists()

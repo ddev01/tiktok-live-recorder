@@ -12,6 +12,10 @@ from utils.utils import cookie_file
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,24}$")
 TWITCH_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{3,25}$")
 PLATFORMS = ("tiktok", "twitch")
+# Streamlink weighs frame rate as well, so ">1080p60" keeps 1080p/1080p60 renditions
+# while dropping 1440p and above.
+TWITCH_QUALITY_CAP = ">1080p60"
+ERROR_TAIL_CHARS = 400
 
 
 def stream_url(username, platform="tiktok"):
@@ -97,9 +101,12 @@ def is_live(username, platform="tiktok"):
         session.http.close()
 
 
-def retag_hevc(path):
-    """QuickTime only plays HEVC tagged hvc1; FFmpeg's pipe muxer writes hev1."""
-    path = Path(path)
+def partial_path(output):
+    """Captures land in TS so a stop that breaks the trailer still leaves usable data."""
+    return Path(output).with_suffix(".part.ts")
+
+
+def video_codec(path):
     try:
         probe = subprocess.run(
             [
@@ -109,7 +116,7 @@ def retag_hevc(path):
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=codec_name,codec_tag_string",
+                "stream=codec_name",
                 "-of",
                 "csv=p=0",
                 str(path),
@@ -118,43 +125,45 @@ def retag_hevc(path):
             text=True,
         )
     except OSError:
-        return
-    if probe.returncode != 0 or probe.stdout.strip() != "hevc,hev1":
-        return
+        return ""
+    # A TS reports the same stream once per program, so only the first line counts.
+    codecs = probe.stdout.strip().splitlines() if probe.returncode == 0 else []
+    return codecs[0] if codecs else ""
 
-    temp = path.with_name(f"{path.stem}.hvc1.tmp{path.suffix}")
+
+def remux(source, output, stderr):
+    """Write the finished MP4 from the capture file; True only for a playable result."""
+    output = Path(output)
+    command = ["ffmpeg", "-nostats", "-n", "-i", str(source), "-c", "copy"]
+    if video_codec(source) == "hevc":
+        command.extend(("-tag:v", "hvc1"))  # QuickTime only plays HEVC tagged hvc1
+    command.append(str(output))
     try:
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-v",
-                "error",
-                "-y",
-                "-i",
-                str(path),
-                "-c",
-                "copy",
-                "-tag:v",
-                "hvc1",
-                str(temp),
-            ],
-            capture_output=True,
-        )
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=stderr)
     except OSError:
-        return
-    if result.returncode == 0 and temp.is_file() and temp.stat().st_size > 0:
-        temp.replace(path)
-    else:
-        temp.unlink(missing_ok=True)
+        result = None
+    if (
+        not result
+        or result.returncode != 0
+        or not output.is_file()
+        or output.stat().st_size == 0
+    ):
+        output.unlink(missing_ok=True)
+        return False
+    return True
 
 
 class StreamCapture:
-    """Pipe Streamlink's origin stream directly into FFmpeg without re-encoding."""
+    """Copy Streamlink's stream to TS, then remux once to MP4 when the capture ends."""
 
     def __init__(self, username, output, platform="tiktok"):
         url = stream_url(username, platform)
         self.output = Path(output)
+        self.partial = partial_path(self.output)
+        self.log = self.output.with_suffix(".log")
+        self.error_detail = None
         self._streamlink_signalled = False
+        self._stderr = self.log.open("wb")
         command = [
             sys.executable,
             "-m",
@@ -170,23 +179,30 @@ class StreamCapture:
         cookies = cookie_file() if platform == "tiktok" else None
         if cookies:
             command.extend(("--http-cookies-file", cookies))
+        if platform == "twitch":
+            command.extend(("--stream-sorting-excludes", TWITCH_QUALITY_CAP))
         command.extend((url, "best"))
         ffmpeg_format = "mpegts" if platform == "twitch" else "flv"
         relay = relay_bytes if platform == "twitch" else relay_flv
 
-        self.streamlink = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
+        try:
+            self.streamlink = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                stderr=self._stderr,
+                close_fds=True,
+            )
+        except OSError:
+            self._discard_artifacts()
+            raise
         self.pid = self.streamlink.pid
         self._relay = None
         try:
             self.ffmpeg = subprocess.Popen(
                 [
                     "ffmpeg",
+                    "-nostats",
                     "-n",
                     "-f",
                     ffmpeg_format,
@@ -194,17 +210,18 @@ class StreamCapture:
                     "pipe:0",
                     "-c",
                     "copy",
-                    str(self.output),
+                    str(self.partial),
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=self._stderr,
                 close_fds=True,
             )
         except Exception:
             self.streamlink.send_signal(signal.SIGINT)
             self.streamlink.stdout.close()
             self.streamlink.wait()
+            self._discard_artifacts()
             raise
         else:
             sink = getattr(self.ffmpeg, "stdin", None)
@@ -240,20 +257,45 @@ class StreamCapture:
         self.ffmpeg.wait()
         if self._relay is not None:
             self._relay.join(timeout=5)
-        if self.ffmpeg.returncode == 0 and self.output.is_file():
-            retag_hevc(self.output)
+        captured = self.partial.is_file() and self.partial.stat().st_size > 0
+        # A failed remux keeps the raw capture; it is still recoverable by hand.
+        if not captured or remux(self.partial, self.output, self._stderr):
+            self.partial.unlink(missing_ok=True)
+        self._close_stderr()
         if not self.finalized:
-            self.output.unlink(missing_ok=True)
+            self.error_detail = self._error_tail()
+        self.log.unlink(missing_ok=True)
         return self.ffmpeg.returncode
+
+    def _close_stderr(self):
+        try:
+            self._stderr.close()
+        except OSError:
+            pass
+
+    def _discard_artifacts(self):
+        self._close_stderr()
+        self.partial.unlink(missing_ok=True)
+        self.log.unlink(missing_ok=True)
+
+    def _error_tail(self):
+        try:
+            lines = [
+                line.strip()
+                for line in self.log.read_text(errors="replace").splitlines()
+                if line.strip()
+            ]
+        except OSError:
+            return None
+        return " | ".join(lines[-3:])[-ERROR_TAIL_CHARS:] or None
 
     @property
     def interrupted(self):
-        return self.streamlink.returncode not in (0, -signal.SIGINT)
+        return (
+            self.streamlink.returncode not in (0, -signal.SIGINT)
+            or self.ffmpeg.returncode != 0
+        )
 
     @property
     def finalized(self):
-        return (
-            self.ffmpeg.returncode == 0
-            and self.output.is_file()
-            and self.output.stat().st_size > 0
-        )
+        return self.output.is_file() and self.output.stat().st_size > 0

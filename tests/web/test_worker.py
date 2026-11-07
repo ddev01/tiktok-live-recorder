@@ -75,12 +75,12 @@ def test_twitch_capture_uses_platform_and_tw_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "disk_status", lambda: {"low_disk": False})
     monkeypatch.setattr("web.worker.StreamCapture", fake_capture)
     worker.launch_queued(recording["id"])
-    assert captured == {
-        "username": "test_user_01",
-        "platform": "twitch",
-        "output": recordings_dir / Path(store.recording(recording["id"])["file_path"]).name,
-    }
-    assert captured["output"].name.startswith("TW_test_user_01_")
+    assert captured["username"] == "test_user_01"
+    assert captured["platform"] == "twitch"
+    saved = Path(store.recording(recording["id"])["file_path"])
+    assert saved == captured["output"].with_suffix(".part.ts")
+    assert saved.parent == recordings_dir
+    assert saved.name.startswith("TW_test_user_01_")
 
 
 def test_store_deduplicates_jobs_with_partial_active_index(tmp_path):
@@ -125,7 +125,9 @@ def test_low_disk_gracefully_stops_an_active_child(tmp_path):
     assert store.recording(recording_id)["status"] == "stopping"
 
 
-def test_worker_persists_in_progress_mp4_path_for_size_estimates(tmp_path, monkeypatch):
+def test_worker_persists_in_progress_capture_path_for_size_estimates(
+    tmp_path, monkeypatch
+):
     worker, store, recordings_dir = make_worker(tmp_path)
     recording = worker.enqueue("creator", 1800)
 
@@ -134,7 +136,8 @@ def test_worker_persists_in_progress_mp4_path_for_size_estimates(tmp_path, monke
 
         def __init__(self, output):
             self.output = Path(output)
-            self.output.write_bytes(b"growing video")
+            self.partial = self.output.with_suffix(".part.ts")
+            self.partial.write_bytes(b"growing video")
 
         def poll(self):
             return None
@@ -210,6 +213,72 @@ def test_interrupted_stream_without_finalized_mp4_is_failed(tmp_path):
     recording = store.recording(recording_id)
     assert recording["status"] == "failed"
     assert recording["file_path"] is None
+
+
+def test_failed_capture_reports_recorder_stderr_in_the_error(tmp_path):
+    worker, store, recordings_dir = make_worker(tmp_path)
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, started_at, pid) "
+            "VALUES ('creator', 'recording', 1, 1, 456)"
+        )
+        recording_id = cursor.lastrowid
+
+    class FailedCapture:
+        output = recordings_dir / "missing.mp4"
+        finalized = False
+        interrupted = False
+        error_detail = "Error opening input file pipe:0"
+
+        def poll(self):
+            return 1
+
+        def wait(self):
+            return 1
+
+    worker.processes[recording_id] = FailedCapture()
+    worker.disk_status = lambda: {"low_disk": False}
+    worker._monitor()
+
+    recording = store.recording(recording_id)
+    assert recording["status"] == "failed"
+    assert recording["error"].endswith("Error opening input file pipe:0")
+
+
+def test_failed_remux_reports_the_kept_raw_capture(tmp_path):
+    worker, store, recordings_dir = make_worker(tmp_path)
+    output = recordings_dir / "TW_creator_2026.01.01_web_1.mp4"
+    partial = output.with_suffix(".part.ts")
+    partial.write_bytes(b"ts")
+    with store.connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO recordings(username, status, created_at, started_at, pid) "
+            "VALUES ('creator', 'recording', 1, 1, 456)"
+        )
+        recording_id = cursor.lastrowid
+
+    class FailedCapture:
+        finalized = False
+        interrupted = False
+        error_detail = None
+
+        def __init__(self):
+            self.output = output
+
+        def poll(self):
+            return 1
+
+        def wait(self):
+            return 1
+
+    worker.processes[recording_id] = FailedCapture()
+    worker.disk_status = lambda: {"low_disk": False}
+    worker._monitor()
+
+    recording = store.recording(recording_id)
+    assert recording["status"] == "failed"
+    assert partial.name in recording["error"]
+    assert partial.exists()
 
 
 def test_worker_reads_persisted_duration_changes_each_poll(tmp_path, monkeypatch):

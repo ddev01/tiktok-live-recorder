@@ -6,7 +6,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from web.capture import StreamCapture
+from web.capture import StreamCapture, partial_path
 from web.search import avatar_file, cache_profile_avatar
 from web.store import Store
 
@@ -60,7 +60,7 @@ class RecordingWorker:
         return disk_status(self.recordings_dir)
 
     def enqueue(
-        self, username, duration_seconds=1800, keep_forever=False, platform="tiktok"
+        self, username, duration_seconds=1320, keep_forever=False, platform="tiktok"
     ):
         return self.store.enqueue_recording(
             username, duration_seconds, keep_forever, platform
@@ -101,7 +101,7 @@ class RecordingWorker:
                 "UPDATE recordings SET status = CASE WHEN status = 'starting' "
                 "THEN 'recording' ELSE status END, started_at = ?, pid = ?, "
                 "file_path = ? WHERE id = ?",
-                (time.time(), process.pid, str(output), recording_id),
+                (time.time(), process.pid, str(partial_path(output)), recording_id),
             )
             status = connection.execute(
                 "SELECT status FROM recordings WHERE id = ?", (recording_id,)
@@ -193,6 +193,11 @@ class RecordingWorker:
             status, error = "completed", None
         else:
             status, error = "failed", "Recorder exited without finalizing an MP4"
+        detail = getattr(process, "error_detail", None)
+        if error and detail:
+            error = f"{error}: {detail}"
+        if not has_video and output and partial_path(output).is_file():
+            error = f"{error}; raw capture kept as {partial_path(output).name}"
         self._finish(recording["id"], status, error, output if has_video else None)
 
     def _finish(self, recording_id, status, error=None, output=None):
