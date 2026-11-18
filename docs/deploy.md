@@ -48,7 +48,7 @@ Run from this app checkout. On first use the script clones the public `ddev01/ti
 ./deploy.sh
 ```
 
-The script connects using `ssh server`, fast-forwards only the app checkout at `~/tt-clipper` by default, builds `Dockerfile.web` on the VPS, validates the stack, deploys only the `tt-clipper` stack, and prints its service status. Configure `REMOTE_PATH`, `STACK_NAME`, or `TRAEFIK_CERTRESOLVER` in the environment to override those defaults. It does not copy `.env` files or secrets, run broad prune commands, or restart unrelated services.
+The script connects using `ssh server`, fast-forwards only the app checkout at `~/tt-clipper` by default, and runs the preflight checks (active Swarm, the three secrets, the `infra-public` network, a valid stack file). It then builds `Dockerfile.web` locally for `linux/amd64` with `docker buildx build --load`, streams the image to the server with `docker save | gzip -1 | ssh server 'gunzip | docker load'` (no registry), deploys only the `tt-clipper` stack, prints its service status, and drops images older than the deployed tag and its predecessor. The build is local because the VPS has 2 vCPU and no room for the ffmpeg toolchain; the server checkout must already contain the commit being deployed, and the script refuses to deploy if its HEAD does not match the image tag. Configure `REMOTE_PATH`, `STACK_NAME`, or `TRAEFIK_CERTRESOLVER` in the environment to override those defaults. It does not copy `.env` files or secrets, run broad prune commands, or restart unrelated services.
 
 To alert on a stalled worker, export `HEALTHCHECK_URL` (the healthchecks.io ping URL) before running the script; it is passed to the worker service only. Unset, the stack sets it to empty and monitoring stays off.
 

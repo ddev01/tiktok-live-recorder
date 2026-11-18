@@ -19,6 +19,50 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN uv sync --frozen --extra web --no-dev
 
+# The app only ever copies streams: mpegts/flv in on pipe:0, mpegts/mp4 out,
+# plus one ffprobe codec_name read. Everything else (encoders, filters, network)
+# is dead weight, so build just that. The AAC decoder is not used for decoding:
+# ADTS carries no sample rate outside the decoder's init, so TS/FLV inputs need
+# it to discover the audio parameters before a copy mux. Same base as the runtime
+# stage keeps glibc in step with the runtime.
+FROM python:3.13-slim AS ffmpeg
+
+ARG FFMPEG_VERSION=8.1.3
+ARG FFMPEG_SHA256=7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential ca-certificates curl nasm xz-utils && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL -o /tmp/ffmpeg.tar.xz \
+        "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" && \
+    echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - && \
+    mkdir -p /src && \
+    tar -xJf /tmp/ffmpeg.tar.xz -C /src --strip-components=1 && \
+    rm /tmp/ffmpeg.tar.xz
+
+WORKDIR /src
+RUN ./configure \
+        --prefix=/usr/local \
+        --disable-everything \
+        --disable-autodetect \
+        --disable-network \
+        --disable-doc \
+        --disable-debug \
+        --enable-protocol=file,pipe \
+        --enable-demuxer=flv,mpegts \
+        --enable-muxer=mpegts,mp4 \
+        --enable-parser=h264,hevc,aac \
+        --enable-decoder=aac \
+        --enable-bsf=aac_adtstoasc \
+        --enable-ffmpeg \
+        --enable-ffprobe \
+        --enable-static \
+        --disable-shared && \
+    make -j"$(nproc)" && \
+    make install && \
+    strip /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -27,11 +71,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src \
     TIKTOK_SESSION_SS_FILE=/run/secrets/tiktok_session_ss
 
-# Debian ffmpeg 7.1 cannot demux TikTok HEVC-in-FLV (codec id 12).
-COPY --from=mwader/static-ffmpeg:8.0@sha256:415a41fa3167b890b9703d20bd0f00bf1e9dab8a4b6c27fef1445b2bf5f1ab4a \
-    /ffmpeg /usr/local/bin/ffmpeg
-COPY --from=mwader/static-ffmpeg:8.0@sha256:415a41fa3167b890b9703d20bd0f00bf1e9dab8a4b6c27fef1445b2bf5f1ab4a \
-    /ffprobe /usr/local/bin/ffprobe
+# ffmpeg 8 demuxes TikTok's HEVC-in-FLV (codec id 12); Debian's 7.1 does not.
+COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 
 RUN groupadd --system app && \
     useradd --system --gid app --home-dir /app app && \

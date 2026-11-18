@@ -6,7 +6,8 @@ remote_path=${REMOTE_PATH:-__DEFAULT__}
 stack_name=${STACK_NAME:-tt-clipper}
 certresolver=${TRAEFIK_CERTRESOLVER:-letsencryptresolver}
 healthcheck_url=${HEALTHCHECK_URL:-$(grep -m1 '^HEALTHCHECK_URL=' "$root/.env" 2>/dev/null | cut -d= -f2-)}
-mode=deploy
+image_tag=$(git -C "$root" rev-parse --short=12 HEAD)
+mode=preflight
 
 if [[ $# -eq 1 && $1 == --validate ]]; then
   mode=validate
@@ -15,14 +16,18 @@ elif [[ $# -ne 0 ]]; then
   exit 2
 fi
 
-ssh server bash -s -- "$remote_path" "$stack_name" "$certresolver" "$healthcheck_url" "$mode" <<'REMOTE'
+# $1 = validate | preflight | deploy. The image is built here for linux/amd64 and
+# streamed to the server, so the 2-vCPU VPS never compiles ffmpeg.
+remote() {
+  ssh server bash -s -- "$remote_path" "$stack_name" "$certresolver" "$healthcheck_url" "$image_tag" "$1" <<'REMOTE'
 set -Eeuo pipefail
 
 remote_path=$1
 stack_name=$2
 certresolver=$3
 healthcheck_url=$4
-mode=$5
+image_tag=$5
+mode=$6
 if [[ $remote_path == __DEFAULT__ ]]; then
   remote_path="$HOME/tt-clipper"
 fi
@@ -43,10 +48,13 @@ if [[ $(git rev-parse --show-toplevel) != "$(pwd -P)" ]]; then
   echo "REMOTE_PATH must be the root of the app Git checkout." >&2
   exit 1
 fi
-if [[ $mode == deploy ]]; then
+if [[ $mode != validate ]]; then
   git pull --ff-only
+  if [[ $(git rev-parse --short=12 HEAD) != "$image_tag" ]]; then
+    echo "Server checkout is at $(git rev-parse --short=12 HEAD) but the image was built from $image_tag; push the commit first." >&2
+    exit 1
+  fi
 fi
-image_tag=$(git rev-parse --short=12 HEAD)
 
 if ! docker info --format '{{.Swarm.LocalNodeState}}' | grep -qx active; then
   echo "Docker Swarm is not active on this server." >&2
@@ -80,8 +88,11 @@ if [[ $mode == validate ]]; then
   echo "Stack configuration and required Swarm resources validated; nothing was deployed."
   exit 0
 fi
+if [[ $mode == preflight ]]; then
+  echo "Server preflight passed for ${stack_name}:${image_tag}; nothing transferred or deployed."
+  exit 0
+fi
 
-docker build --file Dockerfile.web --tag "${stack_name}:${image_tag}" .
 docker stack deploy --resolve-image never --compose-file docker-stack.yml "$stack_name"
 docker stack services "$stack_name"
 
@@ -91,3 +102,15 @@ docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=${stack_
   | grep -vx "${stack_name}:${image_tag}" | tail -n +2 \
   | xargs -r -n1 docker image rm >/dev/null 2>&1 || true
 REMOTE
+}
+
+remote "$mode"
+[[ $mode == deploy ]] || exit 0
+
+docker buildx build --platform linux/amd64 --file "$root/Dockerfile.web" \
+  --tag "${stack_name}:${image_tag}" --load "$root"
+
+# No registry: stream the image straight into the server's image store.
+docker save "${stack_name}:${image_tag}" | gzip -1 | ssh server 'gunzip | docker load'
+
+remote deploy
