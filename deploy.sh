@@ -7,7 +7,7 @@ stack_name=${STACK_NAME:-tt-clipper}
 certresolver=${TRAEFIK_CERTRESOLVER:-letsencryptresolver}
 healthcheck_url=${HEALTHCHECK_URL:-$(grep -m1 '^HEALTHCHECK_URL=' "$root/.env" 2>/dev/null | cut -d= -f2-)}
 image_tag=$(git -C "$root" rev-parse --short=12 HEAD)
-mode=preflight
+mode=deploy
 
 if [[ $# -eq 1 && $1 == --validate ]]; then
   mode=validate
@@ -105,7 +105,11 @@ REMOTE
 }
 
 remote "$mode"
-[[ $mode == deploy ]] || exit 0
+if [[ $mode == validate ]]; then
+  exit 0
+fi
+
+remote preflight
 
 docker buildx build --platform linux/amd64 --file "$root/Dockerfile.web" \
   --tag "${stack_name}:${image_tag}" --load "$root"
