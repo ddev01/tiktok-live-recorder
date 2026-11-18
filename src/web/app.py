@@ -12,7 +12,12 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 
 from web.capture import HANDLE_RE as TIKTOK_HANDLE_RE
 from web.capture import TWITCH_HANDLE_RE, is_live
-from web.search import avatar_file, cache_profile_avatar, search_profiles
+from web.search import (
+    avatar_file,
+    cache_profile_avatar,
+    profile_info,
+    search_profiles,
+)
 from web.store import Store
 from web.worker import LOW_DISK_BYTES, disk_status
 
@@ -309,18 +314,28 @@ def create_app(test_config=None):
 
     def _remember(username, platform="tiktok"):
         store.remember_search(username, time.time(), platform)
-        if not app.config.get("TESTING") and not avatar_file(
-            avatars_dir, username, platform
-        ):
-            def _cache():
-                try:
-                    cache_profile_avatar(
-                        username, avatars_dir, platform=platform
-                    )
-                except Exception:
-                    pass
+        if app.config.get("TESTING"):
+            return
 
-            threading.Thread(target=_cache, daemon=True).start()
+        def _cache():
+            info = {}
+            try:
+                info = profile_info(username, platform)
+            except Exception:
+                pass
+            if info.get("nickname"):
+                store.set_nickname(username, platform, info["nickname"])
+            try:
+                cache_profile_avatar(
+                    username,
+                    avatars_dir,
+                    image_url=info.get("avatar_url"),
+                    platform=platform,
+                )
+            except Exception:
+                pass
+
+        threading.Thread(target=_cache, daemon=True).start()
 
     def _queue_recording(username, platform, duration):
         _remember(username, platform)
@@ -405,6 +420,7 @@ def create_app(test_config=None):
         recent = [
             {
                 "username": item["username"],
+                "display_name": item.get("nickname") or item["username"],
                 "platform": item["platform"],
                 "avatar_url": _avatar_url(item["username"], item["platform"]),
             }

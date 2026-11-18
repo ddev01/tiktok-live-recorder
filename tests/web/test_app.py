@@ -56,7 +56,7 @@ def test_recording_offline_and_live_submission(tmp_path, monkeypatch):
         "platform": "tiktok",
     }
     assert app.extensions["tt_clipper_store"].recent_searches() == [
-        {"username": "creator", "platform": "tiktok"}
+        {"username": "creator", "nickname": None, "platform": "tiktok"}
     ]
 
     monkeypatch.setattr(app_module, "_resolve_live", lambda username, platform="tiktok": True)
@@ -386,6 +386,7 @@ def test_search_recent_list_returns_ten_usernames(tmp_path, monkeypatch):
     assert len(response.json["recent"]) == 10
     assert response.json["recent"][0] == {
         "username": "creator11",
+        "display_name": "creator11",
         "platform": "tiktok",
         "avatar_url": None,
     }
@@ -404,7 +405,12 @@ def test_empty_search_returns_recent_without_requesting_tiktok(tmp_path, monkeyp
     assert response.status_code == 200
     assert response.json == {
         "recent": [
-            {"username": "recent_user", "platform": "tiktok", "avatar_url": None}
+            {
+                "username": "recent_user",
+                "display_name": "recent_user",
+                "platform": "tiktok",
+                "avatar_url": None,
+            }
         ],
         "results": [],
     }
@@ -538,6 +544,24 @@ def test_following_searches_and_displays_nicknames(tmp_path, monkeypatch):
 
     plain = client.get("/api/search?q=plain").json["results"]
     assert plain[0]["display_name"] == "plain_handle"
+
+
+def test_recent_search_shows_and_matches_nickname(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    store.remember_search("recent_handle", time.time())
+    store.set_nickname("recent_handle", "tiktok", "Recent Nick")
+    store.remember_search("recent_handle", time.time() + 1)
+    assert store.recent_searches("tiktok")[0]["nickname"] == "Recent Nick"
+
+    monkeypatch.setattr(app_module, "search_profiles", lambda query: [])
+    client = app.test_client()
+    recent = client.get("/api/search?q=&platform=tiktok").json["recent"]
+    assert recent[0]["display_name"] == "Recent Nick"
+
+    results = client.get("/api/search?q=recent_nick&platform=tiktok").json["results"]
+    assert results[0]["username"] == "recent_handle"
+    assert results[0]["display_name"] == "Recent Nick"
 
 
 def test_avatar_endpoint_serves_cached_file_only(tmp_path):

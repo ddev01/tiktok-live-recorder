@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS watchlist (
 );
 CREATE TABLE IF NOT EXISTS recent_searches (
     username TEXT NOT NULL,
+    nickname TEXT,
     platform TEXT NOT NULL DEFAULT 'tiktok' CHECK(platform IN ('tiktok', 'twitch')),
     searched_at REAL NOT NULL,
     PRIMARY KEY (username, platform)
@@ -212,6 +213,14 @@ class Store:
                 }
                 if "platform" not in search_columns:
                     connection.executescript(RECENT_REBUILD)
+                search_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(recent_searches)")
+                }
+                if "nickname" not in search_columns:
+                    connection.execute(
+                        "ALTER TABLE recent_searches ADD COLUMN nickname TEXT"
+                    )
                 following_columns = {
                     row["name"]
                     for row in connection.execute("PRAGMA table_info(following)")
@@ -286,13 +295,13 @@ class Store:
         with self.connect() as connection:
             if platform:
                 rows = connection.execute(
-                    "SELECT username, platform FROM recent_searches "
+                    "SELECT username, nickname, platform FROM recent_searches "
                     "WHERE platform = ? ORDER BY searched_at DESC LIMIT 10",
                     (platform,),
                 )
             else:
                 rows = connection.execute(
-                    "SELECT username, platform FROM recent_searches "
+                    "SELECT username, nickname, platform FROM recent_searches "
                     "ORDER BY searched_at DESC LIMIT 10"
                 )
             return [dict(row) for row in rows]
@@ -316,15 +325,15 @@ class Store:
             rows = connection.execute(
                 "SELECT username, NULL AS nickname FROM recordings WHERE platform = ? "
                 "UNION ALL SELECT username, NULL FROM watchlist WHERE platform = ? "
-                "UNION ALL SELECT username, NULL FROM recent_searches WHERE platform = ? "
+                "UNION ALL SELECT username, nickname FROM recent_searches "
+                "WHERE platform = ? "
                 "UNION ALL SELECT username, nickname FROM following WHERE platform = ?",
                 (platform, platform, platform, platform),
             ).fetchall()
-        nicknames = {
-            row["username"]: row["nickname"]
-            for row in rows
-            if row["nickname"]
-        }
+        nicknames = {}
+        for row in rows:
+            if row["nickname"]:
+                nicknames[row["username"]] = row["nickname"]
         # shortcut: rank in Python; revisit if known accounts reach tens of thousands.
         ranked = []
         for username in {row["username"] for row in rows}:
@@ -344,14 +353,25 @@ class Store:
             for _, username in ranked[:limit]
         ]
 
-    def remember_search(self, username, timestamp, platform="tiktok"):
+    def remember_search(self, username, timestamp, platform="tiktok", nickname=None):
         with self.connect() as connection:
             connection.execute(
-                "INSERT INTO recent_searches(username, platform, searched_at) "
-                "VALUES (?, ?, ?) "
+                "INSERT INTO recent_searches(username, platform, searched_at, nickname) "
+                "VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(username, platform) DO UPDATE SET "
-                "searched_at = excluded.searched_at",
-                (username, platform, timestamp),
+                "searched_at = excluded.searched_at, "
+                "nickname = COALESCE(excluded.nickname, recent_searches.nickname)",
+                (username, platform, timestamp, nickname),
+            )
+
+    def set_nickname(self, username, platform, nickname):
+        if not nickname:
+            return
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE recent_searches SET nickname = ? "
+                "WHERE username = ? AND platform = ?",
+                (nickname, username, platform),
             )
 
     def replace_following(self, accounts, platform="tiktok"):

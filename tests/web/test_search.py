@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -132,3 +133,59 @@ def test_avatar_host_allowlist_accepts_regional_tiktok_cdn():
         "https://p16-sign-va.tiktokcdn-eu.com.evil.test/pic.jpg"
     )
     assert not search._avatar_image_ok("http://p16-sign-va.tiktokcdn.com/pic.jpg")
+
+
+def test_profile_info_parses_tiktok_page(monkeypatch):
+    page = {
+        "__DEFAULT_SCOPE__": {
+            "webapp.user-detail": {
+                "userInfo": {
+                    "user": {
+                        "nickname": "Sample Nick",
+                        "avatarLarger": (
+                            "https://p16-common-sign.tiktokcdn-eu.com/pic.jpg"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+    html_doc = (
+        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">'
+        + json.dumps(page)
+        + "</script>"
+    )
+
+    class FakeClient:
+        def get(self, url, **kwargs):
+            return SimpleNamespace(raise_for_status=lambda: None, text=html_doc)
+
+    monkeypatch.setattr(search, "read_cookies", lambda: {})
+    monkeypatch.setattr(
+        search, "HttpClient", lambda **kwargs: SimpleNamespace(req=FakeClient())
+    )
+    assert search.profile_info("sample_user") == {
+        "nickname": "Sample Nick",
+        "avatar_url": "https://p16-common-sign.tiktokcdn-eu.com/pic.jpg",
+    }
+
+
+def test_profile_info_parses_twitch_title_and_avatar(monkeypatch):
+    html_doc = (
+        "<html><head><title>Sample Nick - Twitch</title>"
+        '<meta property="og:image" '
+        'content="https://static-cdn.jtvnw.net/pic.png">'
+        "</head></html>"
+    )
+
+    class FakeClient:
+        def get(self, url, **kwargs):
+            return SimpleNamespace(raise_for_status=lambda: None, text=html_doc)
+
+    monkeypatch.setattr(
+        search, "HttpClient", lambda **kwargs: SimpleNamespace(req=FakeClient())
+    )
+    assert search.profile_info("sample_user", "twitch") == {
+        "nickname": "Sample Nick",
+        "avatar_url": "https://static-cdn.jtvnw.net/pic.png",
+    }

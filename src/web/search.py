@@ -1,3 +1,5 @@
+import html
+import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -91,6 +93,68 @@ def cache_profile_avatar(username, avatars_dir, image_url=None, platform="tiktok
         return None
     dest.write_bytes(body)
     return dest
+
+
+def profile_info(username, platform="tiktok"):
+    """Return {"nickname", "avatar_url"} from the public profile page, or {}."""
+    if platform == "twitch":
+        page = HttpClient(cookies={}).req.get(
+            f"https://www.twitch.tv/{username}", timeout=10
+        )
+        page.raise_for_status()
+        text = page.text
+        avatar = _OG_IMAGE.search(text) or _OG_IMAGE_REV.search(text)
+        title = re.search(r"<title>(.*?)</title>", text, re.S)
+        nickname = None
+        if title:
+            label = html.unescape(title.group(1)).strip()
+            nickname = label.removesuffix(" - Twitch").strip() or None
+        return {
+            "nickname": nickname,
+            "avatar_url": avatar.group(1) if avatar else None,
+        }
+
+    page = HttpClient(cookies=read_cookies()).req.get(
+        f"https://www.tiktok.com/@{username}", timeout=10
+    )
+    page.raise_for_status()
+    text = page.text
+    nickname = None
+    avatar_url = None
+    data = re.search(
+        r'id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+        text,
+        re.S,
+    )
+    if data:
+        try:
+            scope = json.loads(data.group(1)).get("__DEFAULT_SCOPE__", {})
+            user = (
+                ((scope.get("webapp.user-detail") or {}).get("userInfo") or {}).get(
+                    "user"
+                )
+                or {}
+            )
+            nickname = (user.get("nickname") or "").strip() or None
+            for key in ("avatarLarger", "avatarMedium", "avatarThumb"):
+                value = user.get(key)
+                if isinstance(value, dict):
+                    urls = value.get("url_list") or []
+                    value = urls[0] if urls else None
+                if isinstance(value, str) and value:
+                    avatar_url = value
+                    break
+        except (ValueError, TypeError):
+            pass
+    if not nickname:
+        title = re.search(r"<title>(.*?)</title>", text, re.S)
+        if title:
+            label = html.unescape(title.group(1)).strip()
+            nickname = label.split(" (@")[0].strip() or None
+    if not avatar_url:
+        avatar = _OG_IMAGE.search(text) or _OG_IMAGE_REV.search(text)
+        avatar_url = avatar.group(1) if avatar else None
+    return {"nickname": nickname, "avatar_url": avatar_url}
 
 
 def search_profiles(query):
