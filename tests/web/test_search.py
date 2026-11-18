@@ -121,3 +121,14 @@ def test_cache_profile_avatar_skips_offsite_image(tmp_path, monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not fetch")),
     )
     assert search.cache_profile_avatar("creator", tmp_path / "avatars") is None
+
+
+def test_avatar_host_allowlist_accepts_regional_tiktok_cdn():
+    assert search._avatar_image_ok(
+        "https://p16-common-sign.tiktokcdn-eu.com/pic.jpg"
+    )
+    assert search._avatar_image_ok("https://p16-sign-va.tiktokcdn.com/pic.jpg")
+    assert not search._avatar_image_ok(
+        "https://p16-sign-va.tiktokcdn-eu.com.evil.test/pic.jpg"
+    )
+    assert not search._avatar_image_ok("http://p16-sign-va.tiktokcdn.com/pic.jpg")

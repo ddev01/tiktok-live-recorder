@@ -16,6 +16,7 @@ _OG_IMAGE_REV = re.compile(
     re.I,
 )
 _MAX_AVATAR_BYTES = 512_000
+_TIKTOK_CDN = re.compile(r"(?:^|\.)tiktokcdn(?:-[a-z0-9]+)?\.com$", re.I)
 
 
 def _avatar_image_ok(url, platform="tiktok"):
@@ -35,8 +36,7 @@ def _avatar_image_ok(url, platform="tiktok"):
     return (
         host == "tiktok.com"
         or host.endswith(".tiktok.com")
-        or host == "tiktokcdn.com"
-        or host.endswith(".tiktokcdn.com")
+        or bool(_TIKTOK_CDN.search(host))
     )
 
 

@@ -384,10 +384,10 @@ def create_app(test_config=None):
             abort(404)
         return render_template("recording.html", recording_id=recording_id)
 
-    def _known_result(username, platform):
+    def _known_result(username, platform, nickname=None):
         return {
             "username": username,
-            "display_name": username,
+            "display_name": nickname or username,
             "platform": platform,
             "avatar_url": _avatar_url(username, platform),
             "is_live": None,
@@ -415,9 +415,11 @@ def create_app(test_config=None):
         needle = query.lstrip("@").lower()
         seen = set()
         results = []
-        for username in store.search_known(needle, platform):
-            seen.add(username)
-            results.append(_known_result(username, platform))
+        for item in store.search_known(needle, platform):
+            seen.add(item["username"])
+            results.append(
+                _known_result(item["username"], platform, item.get("nickname"))
+            )
         if not results:
             try:
                 if platform == "twitch":

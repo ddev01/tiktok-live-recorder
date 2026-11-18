@@ -514,6 +514,32 @@ def test_following_matches_substrings_and_typos(tmp_path, monkeypatch):
     assert store.search_known("wie", "twitch") == []
 
 
+def test_following_searches_and_displays_nicknames(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    assert (
+        store.replace_following(
+            [
+                {"username": "synthetic_handle_9x", "nickname": "sample_nick"},
+                "plain_handle",
+            ]
+        )
+        == 2
+    )
+    monkeypatch.setattr(app_module, "search_profiles", lambda query: [])
+    client = app.test_client()
+
+    by_nickname = client.get("/api/search?q=sample_nick").json["results"]
+    assert by_nickname[0]["username"] == "synthetic_handle_9x"
+    assert by_nickname[0]["display_name"] == "sample_nick"
+
+    by_handle = client.get("/api/search?q=handle_9").json["results"]
+    assert by_handle[0]["display_name"] == "sample_nick"
+
+    plain = client.get("/api/search?q=plain").json["results"]
+    assert plain[0]["display_name"] == "plain_handle"
+
+
 def test_avatar_endpoint_serves_cached_file_only(tmp_path):
     app = make_app(tmp_path)
     avatars = Path(app.config["DATABASE"]).resolve().parent / "avatars"

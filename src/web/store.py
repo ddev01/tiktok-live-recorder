@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS recent_searches (
 );
 CREATE TABLE IF NOT EXISTS following (
     username TEXT NOT NULL,
+    nickname TEXT,
     platform TEXT NOT NULL DEFAULT 'tiktok' CHECK(platform IN ('tiktok', 'twitch')),
     synced_at REAL NOT NULL,
     PRIMARY KEY (username, platform)
@@ -211,6 +212,14 @@ class Store:
                 }
                 if "platform" not in search_columns:
                     connection.executescript(RECENT_REBUILD)
+                following_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(following)")
+                }
+                if "nickname" not in following_columns:
+                    connection.execute(
+                        "ALTER TABLE following ADD COLUMN nickname TEXT"
+                    )
                 connection.commit()
                 self._initialized = True
             finally:
@@ -304,24 +313,36 @@ class Store:
         if not needle:
             return []
         with self.connect() as connection:
-            names = [
-                row[0]
-                for row in connection.execute(
-                    "SELECT username FROM recordings WHERE platform = ? "
-                    "UNION SELECT username FROM watchlist WHERE platform = ? "
-                    "UNION SELECT username FROM recent_searches WHERE platform = ? "
-                    "UNION SELECT username FROM following WHERE platform = ?",
-                    (platform, platform, platform, platform),
-                )
-            ]
+            rows = connection.execute(
+                "SELECT username, NULL AS nickname FROM recordings WHERE platform = ? "
+                "UNION ALL SELECT username, NULL FROM watchlist WHERE platform = ? "
+                "UNION ALL SELECT username, NULL FROM recent_searches WHERE platform = ? "
+                "UNION ALL SELECT username, nickname FROM following WHERE platform = ?",
+                (platform, platform, platform, platform),
+            ).fetchall()
+        nicknames = {
+            row["username"]: row["nickname"]
+            for row in rows
+            if row["nickname"]
+        }
         # shortcut: rank in Python; revisit if known accounts reach tens of thousands.
         ranked = []
-        for name in names:
-            rank = _match_rank(name, needle)
+        for username in {row["username"] for row in rows}:
+            rank = _match_rank(username, needle)
+            nickname = nicknames.get(username)
+            if nickname:
+                nickname_rank = _match_rank(nickname, needle)
+                if nickname_rank is not None and (
+                    rank is None or nickname_rank < rank
+                ):
+                    rank = nickname_rank
             if rank is not None:
-                ranked.append((rank, name))
+                ranked.append((rank, username))
         ranked.sort()
-        return [name for _, name in ranked[:limit]]
+        return [
+            {"username": username, "nickname": nicknames.get(username)}
+            for _, username in ranked[:limit]
+        ]
 
     def remember_search(self, username, timestamp, platform="tiktok"):
         with self.connect() as connection:
@@ -333,21 +354,31 @@ class Store:
                 (username, platform, timestamp),
             )
 
-    def replace_following(self, usernames, platform="tiktok"):
+    def replace_following(self, accounts, platform="tiktok"):
         """Replace the synced Following list; returns how many names were kept."""
-        names = {
-            username.strip().lstrip("@").lower()
-            for username in usernames
-            if isinstance(username, str) and username.strip()
-        }
+        kept = {}
+        for account in accounts:
+            if isinstance(account, str):
+                username, nickname = account, None
+            else:
+                username = account.get("username")
+                nickname = account.get("nickname")
+            username = (username or "").strip().lstrip("@").lower()
+            if not username:
+                continue
+            kept[username] = (nickname or "").strip() or None
         now = time.time()
         with self.transaction() as connection:
             connection.execute("DELETE FROM following WHERE platform = ?", (platform,))
             connection.executemany(
-                "INSERT INTO following(username, platform, synced_at) VALUES (?, ?, ?)",
-                [(name, platform, now) for name in names],
+                "INSERT INTO following(username, nickname, platform, synced_at) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    (username, nickname, platform, now)
+                    for username, nickname in kept.items()
+                ],
             )
-        return len(names)
+        return len(kept)
 
     def active_recording(self, username, platform="tiktok"):
         with self.connect() as connection:
