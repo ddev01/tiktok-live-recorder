@@ -476,7 +476,7 @@ def test_search_matches_known_usernames_without_tiktok(tmp_path, monkeypatch):
     assert [item["username"] for item in response.json["results"]] == ["n1tr01l"]
 
 
-def test_search_known_is_prefix_not_contains(tmp_path, monkeypatch):
+def test_search_known_ranks_prefix_above_contains(tmp_path, monkeypatch):
     app = make_app(tmp_path)
     store = app.extensions["tt_clipper_store"]
     store.remember_search("bobuser", 1)
@@ -487,7 +487,31 @@ def test_search_known_is_prefix_not_contains(tmp_path, monkeypatch):
     assert [item["username"] for item in response.json["results"]] == [
         "bobby",
         "bobuser",
+        "xbob",
     ]
+
+
+def test_following_matches_substrings_and_typos(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.extensions["tt_clipper_store"]
+    assert store.replace_following(
+        ["Demo_Wie_Clip", "@synthetic_stewie_account", "other_sample"]
+    ) == 3
+    monkeypatch.setattr(app_module, "search_profiles", lambda query: [])
+    client = app.test_client()
+    expected = {
+        "wie": "demo_wie_clip",
+        "stewei": "synthetic_stewie_account",
+        "demowia": "demo_wie_clip",
+        "demowue": "demo_wie_clip",
+    }
+    for query, wanted in expected.items():
+        names = [
+            item["username"]
+            for item in client.get(f"/api/search?q={query}").json["results"]
+        ]
+        assert wanted in names, query
+    assert store.search_known("wie", "twitch") == []
 
 
 def test_avatar_endpoint_serves_cached_file_only(tmp_path):

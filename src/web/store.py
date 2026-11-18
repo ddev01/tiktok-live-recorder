@@ -1,3 +1,5 @@
+import difflib
+import re
 import sqlite3
 import threading
 import time
@@ -38,6 +40,12 @@ CREATE TABLE IF NOT EXISTS recent_searches (
     username TEXT NOT NULL,
     platform TEXT NOT NULL DEFAULT 'tiktok' CHECK(platform IN ('tiktok', 'twitch')),
     searched_at REAL NOT NULL,
+    PRIMARY KEY (username, platform)
+);
+CREATE TABLE IF NOT EXISTS following (
+    username TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'tiktok' CHECK(platform IN ('tiktok', 'twitch')),
+    synced_at REAL NOT NULL,
     PRIMARY KEY (username, platform)
 );
 CREATE TABLE IF NOT EXISTS recording_events (
@@ -92,6 +100,47 @@ SELECT username, 'tiktok', searched_at FROM recent_searches;
 DROP TABLE recent_searches;
 ALTER TABLE recent_searches_new RENAME TO recent_searches;
 """
+
+
+def _flatten(value):
+    """Lowercase and drop separators so @A.B,_c matches abc."""
+    return re.sub(r"[^a-z0-9]", "", (value or "").strip().lstrip("@").lower())
+
+
+def _subsequence(needle, value):
+    chars = iter(value)
+    return all(ch in chars for ch in needle)
+
+
+def _closest_window(needle, value):
+    """Best similarity against same-width slices, so a long username still matches."""
+    width = len(needle)
+    best = 0.0
+    for start in range(max(1, len(value) - width + 1)):
+        ratio = difflib.SequenceMatcher(
+            None, needle, value[start : start + width]
+        ).ratio()
+        if ratio > best:
+            best = ratio
+    return best
+
+
+def _match_rank(name, needle):
+    flat = _flatten(name)
+    if flat == needle:
+        return (0, 0)
+    if flat.startswith(needle):
+        return (1, 0)
+    index = flat.find(needle)
+    if index >= 0:
+        return (2, index)
+    if _subsequence(needle, flat):
+        return (3, 0)
+    if len(needle) >= 3:
+        ratio = _closest_window(needle, flat)
+        if ratio >= 0.8:
+            return (4, -ratio)
+    return None
 
 
 class Store:
@@ -251,32 +300,28 @@ class Store:
             ]
 
     def search_known(self, query, platform="tiktok", limit=10):
-        needle = (query or "").strip().lstrip("@").lower()
+        needle = _flatten(query)
         if not needle:
             return []
-        escaped = (
-            needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        )
         with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT username FROM ("
-                "SELECT username FROM recordings WHERE platform = ? "
-                "UNION SELECT username FROM watchlist WHERE platform = ? "
-                "UNION SELECT username FROM recent_searches WHERE platform = ?"
-                ") WHERE username = ? OR username LIKE ? ESCAPE '\\' "
-                "ORDER BY username = ? DESC, username "
-                "LIMIT ?",
-                (
-                    platform,
-                    platform,
-                    platform,
-                    needle,
-                    f"{escaped}%",
-                    needle,
-                    limit,
-                ),
-            )
-            return [row[0] for row in rows]
+            names = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT username FROM recordings WHERE platform = ? "
+                    "UNION SELECT username FROM watchlist WHERE platform = ? "
+                    "UNION SELECT username FROM recent_searches WHERE platform = ? "
+                    "UNION SELECT username FROM following WHERE platform = ?",
+                    (platform, platform, platform, platform),
+                )
+            ]
+        # shortcut: rank in Python; revisit if known accounts reach tens of thousands.
+        ranked = []
+        for name in names:
+            rank = _match_rank(name, needle)
+            if rank is not None:
+                ranked.append((rank, name))
+        ranked.sort()
+        return [name for _, name in ranked[:limit]]
 
     def remember_search(self, username, timestamp, platform="tiktok"):
         with self.connect() as connection:
@@ -287,6 +332,22 @@ class Store:
                 "searched_at = excluded.searched_at",
                 (username, platform, timestamp),
             )
+
+    def replace_following(self, usernames, platform="tiktok"):
+        """Replace the synced Following list; returns how many names were kept."""
+        names = {
+            username.strip().lstrip("@").lower()
+            for username in usernames
+            if isinstance(username, str) and username.strip()
+        }
+        now = time.time()
+        with self.transaction() as connection:
+            connection.execute("DELETE FROM following WHERE platform = ?", (platform,))
+            connection.executemany(
+                "INSERT INTO following(username, platform, synced_at) VALUES (?, ?, ?)",
+                [(name, platform, now) for name in names],
+            )
+        return len(names)
 
     def active_recording(self, username, platform="tiktok"):
         with self.connect() as connection:
